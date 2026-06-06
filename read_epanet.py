@@ -7,8 +7,8 @@ def print_water_network_info(water_network_path):
     water_network = wntr.network.WaterNetworkModel(water_network_path)
 
     print(f'Duration: {water_network.options.time.duration} seconds')
-    print(f'Hydraulic timestep: {water_network.options.time.hydraulic_step_length} seconds')
-    print(f'Pattern timestep: {water_network.options.time.pattern_step_length} seconds')
+    print(f'Hydraulic timestep: {water_network.options.time.hydraulic_timestep} seconds')
+    print(f'Pattern timestep: {water_network.options.time.pattern_timestep} seconds')
     
     print(f'Number of junctions: {water_network.num_junctions}')
     print(f'Number of reservoirs: {water_network.num_reservoirs}')
@@ -64,13 +64,6 @@ class Tank:
         self.head_lower_bound = head_lower_bound
         self.head_upper_bound = head_upper_bound
 
-def hazen_williams_headloss(length, roughness, diameter, flow):
-    return ((10.67 * length) / ((roughness ** 1.852) * (diameter ** 4.8704))) * flow * (abs(flow) ** 0.852)    
-
-def darcy_weisbach_headloss(length, roughness, diameter, flow):
-    f = (2 * np.log10((3.7 * diameter) / roughness)) ** (-2)
-    return ((8 * f * length) / ((np.pi ** 2) * 9.80665 * (diameter ** 5))) * flow * abs(flow)
-
 class Pipe:
     def __init__(self, label: str, start_node: Junction | Tank, end_node: Junction | Tank, length: float, diameter: float, roughness: float, check_valve: bool):
         self.label = label
@@ -95,6 +88,12 @@ class Pipe:
             self.flow_upper_bound =  ((forward_head_diff / self.loss_coefficient) ** 0.5)
             self.flow_lower_bound = -((backward_head_diff / self.loss_coefficient) ** 0.5) if not self.check_valve else np.zeros(len(backward_head_diff))
 
+    def add_flow_bounds(self, flow_lower_bound=None, flow_upper_bound=None):
+        if flow_lower_bound is not None:
+            self.flow_lower_bound = flow_lower_bound if not hasattr(self, 'flow_lower_bound') else np.maximum(flow_lower_bound, self.flow_lower_bound)
+        if flow_upper_bound is not None:
+            self.flow_upper_bound = flow_upper_bound if not hasattr(self, 'flow_upper_bound') else np.minimum(flow_upper_bound, self.flow_upper_bound)
+
 class Valve:
     def __init__(self, label: str, start_node: Junction | Tank, end_node: Junction | Tank, diameter: float, valve_type: str):
         self.label = label
@@ -104,9 +103,11 @@ class Valve:
         self.diameter = diameter
         self.valve_type = valve_type
 
-    def add_flow_bounds(self, flow_lower_bound: np.array, flow_upper_bound: np.array):
-        self.flow_lower_bound = flow_lower_bound
-        self.flow_upper_bound = flow_upper_bound
+    def add_flow_bounds(self, flow_lower_bound=None, flow_upper_bound=None):
+        if flow_lower_bound is not None:
+            self.flow_lower_bound = flow_lower_bound if not hasattr(self, 'flow_lower_bound') else np.maximum(flow_lower_bound, self.flow_lower_bound)
+        if flow_upper_bound is not None:
+            self.flow_upper_bound = flow_upper_bound if not hasattr(self, 'flow_upper_bound') else np.minimum(flow_upper_bound, self.flow_upper_bound)
 
 class Pump:
     def __init__(self, label: str, start_node: Junction | Tank, end_node: Junction | Tank, pump_type: str, fixed_cost: np.array, operational_cost: np.array):
@@ -118,19 +119,23 @@ class Pump:
         self.fixed_cost = fixed_cost
         self.operational_cost = operational_cost
 
-    def add_flow_bounds(self, flow_upper_bound: np.array):
-        self.flow_lower_bound = np.zeros(len(flow_upper_bound))
-        self.flow_upper_bound = flow_upper_bound
+    def add_flow_bounds(self, flow_lower_bound=None, flow_upper_bound=None):
+        if flow_lower_bound is not None:
+            self.flow_lower_bound = flow_lower_bound if not hasattr(self, 'flow_lower_bound') else np.maximum(flow_lower_bound, self.flow_lower_bound)
+        if flow_upper_bound is not None:
+            self.flow_upper_bound = flow_upper_bound if not hasattr(self, 'flow_upper_bound') else np.minimum(flow_upper_bound, self.flow_upper_bound)
 
     def add_pump_costs(self, fixed_cost: np.array, operational_cost: np.array):
         self.fixed_cost = fixed_cost
         self.operational_cost = operational_cost
 
+    def add_head_curve(self, curve_a, curve_b, curve_c):
+        self.curve_a, self.curve_b, self.curve_c = curve_a, curve_b, curve_c
+
 def fetch_epanet_data(water_network_path, head_loss_equation):
     water_network = wntr.network.WaterNetworkModel(water_network_path)
 
     patterns = {}
-    curves = {}
     junctions = {}
     tanks = {}
     pumps = {}
@@ -148,16 +153,13 @@ def fetch_epanet_data(water_network_path, head_loss_equation):
         n_repeats = math.ceil(time_steps / cycle.size)
         return np.tile(cycle, n_repeats)[:time_steps]
 
-    global_pump_efficiency = water_network.options.energy.global_efficiency
     global_energy_price = water_network.options.energy.global_price
     global_energy_price_pattern = water_network.options.energy.global_pattern
     global_demand_pattern = water_network.options.hydraulic.pattern
+    global_demand_multiplier = water_network.options.hydraulic.demand_multiplier
 
     for pattern_name, each_pattern in water_network.patterns():
         patterns[pattern_name] = each_pattern.multipliers
-
-    for curve_name, each_curve in water_network.curves():
-        curves[curve_name] = each_curve.points
 
     for reservoir_name, each_reservoir in water_network.reservoirs():
         reservoir_head = expand_pattern(patterns[each_reservoir.head_pattern_name], each_reservoir.base_head) if each_reservoir.head_pattern_name in patterns else np.repeat(each_reservoir.base_head, time_steps)
@@ -175,17 +177,37 @@ def fetch_epanet_data(water_network_path, head_loss_equation):
         tanks[tank_name] = Tank(tank_name, each_tank.elevation, diameter, area, storage_initial, storage_lower_bound, storage_upper_bound)
         tanks[tank_name].add_head_bounds(np.repeat(each_tank.elevation + each_tank.min_level, time_steps), np.repeat(each_tank.elevation + each_tank.max_level, time_steps))
 
-    global_head_upper_bound = np.max([node.head_upper_bound for node in (junctions | tanks).values()], axis=0)
-
     for junction_name, each_junction in water_network.junctions():
         junction_demand_pattern = each_junction.demand_pattern if each_junction.demand_pattern in patterns else global_demand_pattern
         net_demand = expand_pattern(patterns[junction_demand_pattern], each_junction.base_demand) if junction_demand_pattern is not None else np.repeat(each_junction.base_demand, time_steps)
         junction_elevation = np.repeat(each_junction.elevation, time_steps)
 
-        junctions[junction_name] = Junction(junction_name, 'junction', junction_elevation, net_demand)
-        junctions[junction_name].add_head_bounds(junction_elevation, global_head_upper_bound)
+        junctions[junction_name] = Junction(junction_name, 'junction', junction_elevation, net_demand * global_demand_multiplier)
 
     nodes = junctions | tanks
+    global_max_head = np.max([node.head_upper_bound if hasattr(node, 'head_upper_bound') else node.elevation for node in (junctions | tanks).values()], axis=0)
+
+    for pump_name, each_pump in water_network.pumps():
+        base_energy_price = each_pump.energy_price or global_energy_price or 1.0
+        energy_price_pattern = each_pump.energy_pattern or global_energy_price_pattern
+        energy_price = expand_pattern(patterns[energy_price_pattern], base_energy_price) if energy_price_pattern is not None else np.repeat(base_energy_price, time_steps)
+
+        start_node = nodes[each_pump.start_node_name]
+        end_node = nodes[each_pump.end_node_name]
+
+        pumps[pump_name] = Pump(pump_name, start_node, end_node, each_pump.pump_type, np.repeat(100.0, time_steps), energy_price)
+        start_node.add_outgoing_edge(pumps[pump_name])
+        end_node.add_incoming_edge(pumps[pump_name])
+
+        curve_a, curve_b, curve_c = each_pump.get_head_curve_coefficients()
+        pumps[pump_name].add_head_curve(curve_a, -curve_b, curve_c)
+        flow_upper_bound = (-pumps[pump_name].curve_a / pumps[pump_name].curve_b) ** (1 / pumps[pump_name].curve_c)
+        pumps[pump_name].add_flow_bounds(np.zeros(time_steps), np.full(time_steps, flow_upper_bound))
+
+    max_head_gain = max((pump.curve_a for pump in pumps.values()), default=0.0)
+
+    for junction_name, each_junction in water_network.junctions():
+        junctions[junction_name].add_head_bounds(junctions[junction_name].elevation, global_max_head + max_head_gain)
 
     for pipe_name, each_pipe in water_network.pipes():
         length = each_pipe.length
@@ -200,22 +222,9 @@ def fetch_epanet_data(water_network_path, head_loss_equation):
         start_node.add_outgoing_edge(pipes[pipe_name])
         end_node.add_incoming_edge(pipes[pipe_name])
         pipes[pipe_name].add_flow_bounds_from_heads(head_loss_equation)
-    
+
     global_flow_upper_bound = np.max([pipe.flow_upper_bound for pipe in pipes.values()], axis=0)
     global_flow_lower_bound = np.min([pipe.flow_lower_bound for pipe in pipes.values()], axis=0)
-
-    for pump_name, each_pump in water_network.pumps():
-        base_energy_price = each_pump.energy_price or global_energy_price or 1.0
-        energy_price_pattern = each_pump.energy_pattern or global_energy_price_pattern
-        energy_price = expand_pattern(patterns[energy_price_pattern], base_energy_price) if energy_price_pattern is not None else np.repeat(base_energy_price, time_steps)
-
-        start_node = nodes[each_pump.start_node_name]
-        end_node = nodes[each_pump.end_node_name]
-
-        pumps[pump_name] = Pump(pump_name, start_node, end_node, each_pump.pump_type, np.repeat(100.0, time_steps), energy_price)
-        start_node.add_outgoing_edge(pumps[pump_name])
-        end_node.add_incoming_edge(pumps[pump_name])
-        pumps[pump_name].add_flow_bounds(global_flow_upper_bound)
 
     for valve_name, each_valve in water_network.valves():
         diameter = each_valve.diameter
@@ -228,6 +237,12 @@ def fetch_epanet_data(water_network_path, head_loss_equation):
         start_node.add_outgoing_edge(valves[valve_name])
         end_node.add_incoming_edge(valves[valve_name])
         valves[valve_name].add_flow_bounds(global_flow_lower_bound, global_flow_upper_bound)
+
+    storage_capacity = np.sum([tank.storage_upper_bound - tank.storage_lower_bound for tank in tanks.values()]) / hydraulic_step_length
+    total_demand = np.maximum(np.array([junction.net_demand for junction in junctions.values() if junction.net_demand is not None]), 0.0).sum(axis=0)
+
+    for link in (pipes | pumps | valves).values():
+        link.add_flow_bounds(-(total_demand + storage_capacity), total_demand + storage_capacity)
 
     return junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_step_length
 
