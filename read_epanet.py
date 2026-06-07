@@ -79,6 +79,7 @@ class Pipe:
         forward_head_diff = np.maximum(self.start_node.head_upper_bound - self.end_node.head_lower_bound, 0.0)
         backward_head_diff = np.maximum(self.end_node.head_upper_bound - self.start_node.head_lower_bound, 0.0)
 
+        # Currently, all input files have HW. If DW, then one should adjust coefficients with adequate units
         if head_loss_equation == 'HW':
             self.loss_coefficient = (10.67 * self.length) / ((self.roughness ** 1.852) * (self.diameter ** 4.8704))
             self.flow_upper_bound =  (forward_head_diff / self.loss_coefficient) ** (1 / 1.852)
@@ -129,6 +130,7 @@ class Pump:
         self.fixed_cost = fixed_cost
         self.operational_cost = operational_cost
 
+    #We only consider HEAD pumps, POWER pumps and fixed speed pumps are neglected
     def add_head_curve(self, curve_a, curve_b, curve_c):
         self.curve_a, self.curve_b, self.curve_c = curve_a, curve_b, curve_c
 
@@ -204,10 +206,10 @@ def fetch_epanet_data(water_network_path, head_loss_equation):
         flow_upper_bound = (-pumps[pump_name].curve_a / pumps[pump_name].curve_b) ** (1 / pumps[pump_name].curve_c)
         pumps[pump_name].add_flow_bounds(np.zeros(time_steps), np.full(time_steps, flow_upper_bound))
 
-    max_head_gain = max((pump.curve_a for pump in pumps.values()), default=0.0)
+    total_pump_head_gain = sum((pump.curve_a for pump in pumps.values()), 0.0)
 
     for junction_name, each_junction in water_network.junctions():
-        junctions[junction_name].add_head_bounds(junctions[junction_name].elevation, global_max_head + max_head_gain)
+        junctions[junction_name].add_head_bounds(junctions[junction_name].elevation, global_max_head + total_pump_head_gain)
 
     for pipe_name, each_pipe in water_network.pipes():
         length = each_pipe.length
@@ -245,9 +247,3 @@ def fetch_epanet_data(water_network_path, head_loss_equation):
         link.add_flow_bounds(-(total_demand + storage_capacity), total_demand + storage_capacity)
 
     return junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_step_length
-
-if __name__ == '__main__':
-    head_loss_equation = 'HW'
-    print_water_network_info('data/epanet/Net1.inp')
-    #fetch_epanet_data('data/epanet/Net1.inp', head_loss_equation)
-    #fetch_epanet_data('data/epanet/st-net3-3.inp', head_loss_equation)

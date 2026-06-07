@@ -14,14 +14,14 @@ def darcy_weisbach_headloss(length, roughness, diameter, flow):
 if __name__ == '__main__':
 
     head_loss_equation = 'HW'
-    
-    epanet_model = 'Net1'
-
-    #water_network_path = 'data/tasseff/ATM/ATM-12_Steps-Day_1.inp'
-
-    water_network_path = f'data/epanet/{epanet_model}.inp'
 
     solver = 'gurobi'
+
+    epanet_model, model_folder = 'Net1', 'epanet'
+
+    #epanet_model, model_folder = 'Simple_FSD-12_Steps-Day_1', 'tasseff'
+
+    water_network_path = f'data/{model_folder}/{epanet_model}.inp'
 
     junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep = fetch_epanet_data(water_network_path, head_loss_equation)
 

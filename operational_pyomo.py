@@ -40,34 +40,34 @@ def DefineDecisionVariables(model):
 def DefineObjective(model):
     model.OBJ = pyo.Objective(rule=_objective_function, sense=pyo.minimize)
 
-def AddHeadLossConstraints(model, head_loss_equation, epsilon = 0.0):
+def AddHeadLossConstraints(model, head_loss_equation, epsilon):
     exponent = 1.852 if head_loss_equation == 'HW' else 2
-    model._cons_head_loss = pyo.Constraint(model._set_of_pipes, model._set_of_time_periods, rule=lambda model, pipe, t: (model._head[model._pipes[pipe].start_node.label, t] - model._head[model._pipes[pipe].end_node.label, t] - (model._pipes[pipe].loss_coefficient * model._flow[pipe, t] * (((model._flow[pipe, t] ** 2) + epsilon) ** ((exponent - 1) / 2))) == 0))
+    model._cons_head_loss = pyo.Constraint(model._set_of_pipes, model._set_of_time_periods, rule=lambda model, pipe, t: model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == model._pipes[pipe].loss_coefficient * model._flow[pipe,t] * (((model._flow[pipe,t] ** 2) + epsilon) ** ((exponent - 1) / 2)))
 
 def AddPumpFlowConstraints(model):
-    model._cons_pump_flow_l = pyo.Constraint(model._set_of_pumps, model._set_of_time_periods, rule=lambda model, pump, t: (model._flow[pump, t] - (model._pump_status[pump, t] * model._pumps[pump].flow_lower_bound[t-1]) >= 0))
-    model._cons_pump_flow_u = pyo.Constraint(model._set_of_pumps, model._set_of_time_periods, rule=lambda model, pump, t: ((model._pump_status[pump, t] * model._pumps[pump].flow_upper_bound[t-1]) - model._flow[pump, t] >= 0))
+    model._cons_pump_flow_l = pyo.Constraint(model._set_of_pumps, model._set_of_time_periods, rule=lambda model, pump, t: model._flow[pump,t] >= model._pumps[pump].flow_lower_bound[t-1] * model._pump_status[pump,t])
+    model._cons_pump_flow_u = pyo.Constraint(model._set_of_pumps, model._set_of_time_periods, rule=lambda model, pump, t: model._pumps[pump].flow_upper_bound[t-1] * model._pump_status[pump,t] >= model._flow[pump,t])
 
 def AddValveFlowConstraints(model):
-    model._cons_valve_flow_l = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: (model._flow[valve, t] - (model._valve_status[valve, t] * model._valves[valve].flow_lower_bound[t-1]) >= 0))
-    model._cons_valve_flow_u = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: ((model._valve_status[valve, t] * model._valves[valve].flow_upper_bound[t-1]) - model._flow[valve, t] >= 0))
+    model._cons_valve_flow_l = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: model._flow[valve,t] >= model._valves[valve].flow_lower_bound[t-1] * model._valve_status[valve,t])
+    model._cons_valve_flow_u = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: model._valve_status[valve,t] * model._valves[valve].flow_upper_bound[t-1] >= model._flow[valve,t])
 
-def AddPumpHeadConstraints(model):
-    model._cons_pump_head_l = pyo.Constraint(model._set_of_pumps, model._set_of_time_periods, rule=lambda model, pump, t: (model._pumps[pump].start_node.head_lower_bound[t-1] - model._pumps[pump].end_node.head_upper_bound[t-1]) * (1 - model._pump_status[pump, t]) <= model._head[model._pumps[pump].start_node.label, t] - model._head[model._pumps[pump].end_node.label, t] + (model._pumps[pump].curve_a * model._pump_status[pump, t]) + (model._pumps[pump].curve_b * (model._flow[pump, t] ** model._pumps[pump].curve_c)))
-    model._cons_pump_head_u = pyo.Constraint(model._set_of_pumps, model._set_of_time_periods, rule=lambda model, pump, t: (model._pumps[pump].start_node.head_upper_bound[t-1] - model._pumps[pump].end_node.head_lower_bound[t-1]) * (1 - model._pump_status[pump, t]) >= model._head[model._pumps[pump].start_node.label, t] - model._head[model._pumps[pump].end_node.label, t] + (model._pumps[pump].curve_a * model._pump_status[pump, t]) + (model._pumps[pump].curve_b * (model._flow[pump, t] ** model._pumps[pump].curve_c)))
+def AddPumpHeadConstraints(model, epsilon):
+    model._cons_pump_head_l = pyo.Constraint(model._set_of_pumps, model._set_of_time_periods, rule=lambda model, pump, t: model._head[model._pumps[pump].start_node.label,t] - model._head[model._pumps[pump].end_node.label,t] + (model._pumps[pump].curve_a * model._pump_status[pump,t]) + (model._pumps[pump].curve_b * ((model._flow[pump,t] + epsilon) ** model._pumps[pump].curve_c)) >= (model._pumps[pump].start_node.head_lower_bound[t-1] - model._pumps[pump].end_node.head_upper_bound[t-1]) * (1 - model._pump_status[pump,t]))
+    model._cons_pump_head_u = pyo.Constraint(model._set_of_pumps, model._set_of_time_periods, rule=lambda model, pump, t: (model._pumps[pump].start_node.head_upper_bound[t-1] - model._pumps[pump].end_node.head_lower_bound[t-1]) * (1 - model._pump_status[pump,t]) >= model._head[model._pumps[pump].start_node.label,t] - model._head[model._pumps[pump].end_node.label,t] + (model._pumps[pump].curve_a * model._pump_status[pump,t]) + (model._pumps[pump].curve_b * ((model._flow[pump,t] + epsilon) ** model._pumps[pump].curve_c)))
 
 def AddValveHeadConstraints(model):
-    model._cons_valve_head_l = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: (model._head[model._valves[valve].start_node.label, t] - model._head[model._valves[valve].end_node.label, t] - ((model._valves[valve].start_node.head_lower_bound[t-1] - model._valves[valve].end_node.head_upper_bound[t-1]) * (1 - model._valve_status[valve, t])) >= 0))
-    model._cons_valve_head_u = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: (((model._valves[valve].start_node.head_upper_bound[t-1] - model._valves[valve].end_node.head_lower_bound[t-1]) * (1 - model._valve_status[valve, t])) - model._head[model._valves[valve].start_node.label, t] + model._head[model._valves[valve].end_node.label, t] >= 0))
+    model._cons_valve_head_l = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] >= (model._valves[valve].start_node.head_lower_bound[t-1] - model._valves[valve].end_node.head_upper_bound[t-1]) * (1 - model._valve_status[valve,t]))
+    model._cons_valve_head_u = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: (model._valves[valve].start_node.head_upper_bound[t-1] - model._valves[valve].end_node.head_lower_bound[t-1]) * (1 - model._valve_status[valve,t]) >= model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t])
 
 def AddTankBalanceConstraints(model, hydraulic_timestep): #m^3 / s == m^3
-    model._cons_tank_balance = pyo.Constraint(model._set_of_tanks, model._set_of_time_periods, rule=lambda model, tank, t: (hydraulic_timestep * sum(model._flow[edge.label, t] for edge in model._tanks[tank].incoming_edges) - hydraulic_timestep * sum(model._flow[edge.label, t] for edge in model._tanks[tank].outgoing_edges) - model._storage[tank, t] + model._storage[tank, t-1] == 0))
+    model._cons_tank_balance = pyo.Constraint(model._set_of_tanks, model._set_of_time_periods, rule=lambda model, tank, t: hydraulic_timestep * sum(model._flow[edge.label,t] for edge in model._tanks[tank].incoming_edges) - hydraulic_timestep * sum(model._flow[edge.label,t] for edge in model._tanks[tank].outgoing_edges) == model._storage[tank,t] - model._storage[tank,t-1])
 
 def AddJunctionBalanceConstraints(model): #m^3 / s == m^3
-    model._cons_junction_balance = pyo.Constraint(model._set_of_non_reservoir_junctions, model._set_of_time_periods, rule=lambda model, junction, t: (sum(model._flow[edge.label, t] for edge in model._junctions[junction].incoming_edges) - sum(model._flow[edge.label, t] for edge in model._junctions[junction].outgoing_edges) - model._junctions[junction].net_demand[t-1] == 0))
+    model._cons_junction_balance = pyo.Constraint(model._set_of_non_reservoir_junctions, model._set_of_time_periods, rule=lambda model, junction, t: sum(model._flow[edge.label,t] for edge in model._junctions[junction].incoming_edges) - sum(model._flow[edge.label,t] for edge in model._junctions[junction].outgoing_edges) == model._junctions[junction].net_demand[t-1])
 
 def AddTankHeadConstraints(model):
-    model._cons_tank_head = pyo.Constraint(model._set_of_tanks,  model._set_of_time_periods, rule=lambda model, tank, t: (model._head[tank, t] == model._tanks[tank].elevation + ((1 / model._tanks[tank].area) * model._storage[tank, t])))
+    model._cons_tank_head = pyo.Constraint(model._set_of_tanks, model._set_of_time_periods, rule=lambda model, tank, t: model._head[tank,t] == model._tanks[tank].elevation + ((1 / model._tanks[tank].area) * model._storage[tank,t]))
 
 def PyomoOperationalModel(epanet_model, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation):
     model = pyo.ConcreteModel()
@@ -80,7 +80,7 @@ def PyomoOperationalModel(epanet_model, junctions, tanks, pipes, pumps, valves, 
     AddHeadLossConstraints(model, head_loss_equation, 1e-6)
     AddPumpFlowConstraints(model)
     AddValveFlowConstraints(model)
-    AddPumpHeadConstraints(model)
+    AddPumpHeadConstraints(model, 1e-6)
     AddValveHeadConstraints(model)
     AddTankBalanceConstraints(model, hydraulic_timestep)
     AddJunctionBalanceConstraints(model)
