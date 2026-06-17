@@ -15,11 +15,11 @@ if __name__ == '__main__':
 
     head_loss_equation = 'HW'
 
-    solver = 'gurobi'
+    solver = 'mosek'
 
     epanet_model, model_folder = 'Net1', 'epanet'
 
-    #epanet_model, model_folder = 'Simple_FSD-12_Steps-Day_1', 'tasseff'
+    #epanet_model, model_folder = 'ATM-12_Steps-Day_1', 'tasseff'
 
     water_network_path = f'data/{model_folder}/{epanet_model}.inp'
 

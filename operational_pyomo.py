@@ -16,7 +16,7 @@ def _storage_bounds(model, i, t):
         return model._tanks[i].storage_lower_bound, model._tanks[i].storage_upper_bound
 
 def _objective_function(model):
-    return pyo.quicksum((model._pumps[i].fixed_cost[t-1] * model._pump_status[i, t]) + (model._pumps[i].operational_cost[t-1] * model._flow[i, t]) for i in model._set_of_pumps for t in model._set_of_time_periods)
+    return pyo.quicksum((model._pumps[i].fixed_cost[t-1] * model._pump_status[i,t]) + (model._pumps[i].operational_cost[t-1] * model._flow[i,t]) for i in model._set_of_pumps for t in model._set_of_time_periods)
 
 def DefineSets(model):
     model._set_of_junctions = pyo.Set(initialize=list(model._junctions.keys()))
@@ -89,8 +89,8 @@ def PyomoOperationalModel(epanet_model, junctions, tanks, pipes, pumps, valves, 
     results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results')
     os.makedirs(results_dir, exist_ok=True)
 
-    with open(os.path.join(results_dir, f'{epanet_model}_formulation.txt'), 'w') as f:
-        model.pprint(ostream=f)
+    #with open(os.path.join(results_dir, f'{epanet_model}_formulation.txt'), 'w') as f:
+    #    model.pprint(ostream=f)
 
     solver = pyo.SolverFactory('baron', executable='/Users/emirsener/baron-osxarm64/baron')
     solver.options['CplexLibName'] = '/Users/emirsener/Applications/CPLEX_Studio2212/cplex/bin/arm64_osx/libcplex2212.dylib'
@@ -98,7 +98,7 @@ def PyomoOperationalModel(epanet_model, junctions, tanks, pipes, pumps, valves, 
     solver.options['LPSol'] = 3
 
     log_path = os.path.join(results_dir, f'{epanet_model}_baron_log.txt')
-    with tempfile.TemporaryDirectory(prefix='pyomo_baron_') as scratch:
+    with tempfile.TemporaryDirectory(prefix='pyomo_baron_', dir=results_dir) as scratch:
         TempfileManager.tempdir = scratch
         results = solver.solve(model, tee=True, logfile=log_path)
 
