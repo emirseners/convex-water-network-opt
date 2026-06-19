@@ -1,6 +1,7 @@
 import os
 import tempfile
 import pyomo.environ as pyo
+from pyomo.opt import TerminationCondition
 from pyomo.common.tempfiles import TempfileManager
 
 def _headbounds(model, i, t):
@@ -30,12 +31,16 @@ def DefineSets(model):
     model._set_of_nodes = pyo.Set(initialize=list(model._nodes.keys()))
     model._set_of_links = pyo.Set(initialize=list(model._links.keys()))
 
-def DefineDecisionVariables(model):
+def DefineDecisionVariables(model, method):
     model._head = pyo.Var(model._set_of_nodes, model._set_of_time_periods, bounds=_headbounds)
     model._flow = pyo.Var(model._set_of_links, model._set_of_time_periods, bounds=_flowbounds)
     model._storage = pyo.Var(model._set_of_tanks, model._set_of_time_periods_with_initial, bounds=_storage_bounds)
-    model._pump_status = pyo.Var(model._set_of_pumps, model._set_of_time_periods, domain=pyo.Binary)
-    model._valve_status = pyo.Var(model._set_of_valves, model._set_of_time_periods, domain=pyo.Binary)
+    if method in ['algorithm2', 'ipopt']:
+        model._pump_status = pyo.Var(model._set_of_pumps, model._set_of_time_periods, domain=pyo.UnitInterval)
+        model._valve_status = pyo.Var(model._set_of_valves, model._set_of_time_periods, domain=pyo.UnitInterval)
+    else:
+        model._pump_status = pyo.Var(model._set_of_pumps, model._set_of_time_periods, domain=pyo.Binary)
+        model._valve_status = pyo.Var(model._set_of_valves, model._set_of_time_periods, domain=pyo.Binary)
 
 def DefineObjective(model):
     model.OBJ = pyo.Objective(rule=_objective_function, sense=pyo.minimize)
@@ -69,13 +74,13 @@ def AddJunctionBalanceConstraints(model): #m^3 / s == m^3
 def AddTankHeadConstraints(model):
     model._cons_tank_head = pyo.Constraint(model._set_of_tanks, model._set_of_time_periods, rule=lambda model, tank, t: model._head[tank,t] == model._tanks[tank].elevation + ((1 / model._tanks[tank].area) * model._storage[tank,t]))
 
-def PyomoOperationalModel(epanet_model, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation):
+def PyomoOperationalModel(method, epanet_model, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation, pump_status = None, valve_status = None):
     model = pyo.ConcreteModel()
     model._junctions, model._tanks, model._pipes, model._pumps, model._valves, model._time_steps = junctions, tanks, pipes, pumps, valves, time_steps
     model._nodes, model._links = junctions | tanks, pipes | pumps | valves
 
     DefineSets(model)
-    DefineDecisionVariables(model)
+    DefineDecisionVariables(model, method)
     DefineObjective(model)
     AddHeadLossConstraints(model, head_loss_equation, 1e-6)
     AddPumpFlowConstraints(model)
@@ -86,21 +91,50 @@ def PyomoOperationalModel(epanet_model, junctions, tanks, pipes, pumps, valves, 
     AddJunctionBalanceConstraints(model)
     AddTankHeadConstraints(model)
 
-    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results')
-    os.makedirs(results_dir, exist_ok=True)
-
-    #with open(os.path.join(results_dir, f'{epanet_model}_formulation.txt'), 'w') as f:
+    #with open(os.path.join(results_directory, 'pyomo_model.txt'), 'w') as f:
     #    model.pprint(ostream=f)
 
-    solver = pyo.SolverFactory('baron', executable='/Users/emirsener/baron-osxarm64/baron')
-    solver.options['CplexLibName'] = '/Users/emirsener/Applications/CPLEX_Studio2212/cplex/bin/arm64_osx/libcplex2212.dylib'
-    solver.options['MaxTime'] = 3600
-    solver.options['LPSol'] = 3
+    if method in ['algorithm2', 'ipopt']:
+        solver = pyo.SolverFactory('ipopt')
+        solver.options['max_cpu_time'] = 720
 
-    log_path = os.path.join(results_dir, f'{epanet_model}_baron_log.txt')
-    with tempfile.TemporaryDirectory(prefix='pyomo_baron_', dir=results_dir) as scratch:
+        if pump_status is not None:
+            for pump in model._set_of_pumps:
+                for t in model._set_of_time_periods:
+                    model._pump_status[pump, t].fix(float(pump_status[pump][t-1]))
+
+        if valve_status is not None:
+            for valve in model._set_of_valves:
+                for t in model._set_of_time_periods:
+                    model._valve_status[valve, t].fix(float(valve_status[valve][t-1]))
+
+    else:
+        solver = pyo.SolverFactory('baron', executable='/Users/emirsener/baron-osxarm64/baron')
+        solver.options['CplexLibName'] = '/Users/emirsener/Applications/CPLEX_Studio2212/cplex/bin/arm64_osx/libcplex2212.dylib'
+        solver.options['MaxTime'] = 720
+        solver.options['LPSol'] = 3
+
+    log_path = os.path.join(results_directory, 'algorithm2_pyomo_log.txt' if method == 'algorithm2' else f'{method}_log.txt')
+    with tempfile.TemporaryDirectory(prefix='algorithm2_pyomo_' if method == 'algorithm2' else f'{method}_', dir=results_directory) as scratch:
         TempfileManager.tempdir = scratch
-        results = solver.solve(model, tee=True, logfile=log_path)
+        results = solver.solve(model, tee=True, logfile=log_path, load_solutions=False)
 
-    with open(os.path.join(results_dir, f'{epanet_model}_solution.txt'), 'w') as f:
-        model.display(ostream=f)
+    problem_status = 'infeasible' if results.solver.termination_condition == TerminationCondition.infeasible else 'feasible' if len(results.solution) > 0 else 'nosolution'
+
+    if problem_status == 'feasible':
+        model.solutions.load_from(results)
+        upper_bound = pyo.value(model.OBJ)
+    else:
+        upper_bound = None
+
+    if method in ['algorithm2', 'ipopt']:
+        solution_time = results.solver.time
+        lower_bound = None
+    else:
+        solution_time = results.solver.wallclock_time
+        lower_bound = results.problem.lower_bound if problem_status == 'feasible' else None
+
+    #with open(os.path.join(results_directory, 'algorithm2_pyomo_solution.txt' if method == 'algorithm2' else f'{method}_solution.txt'), 'w') as f:
+    #    model.display(ostream=f)
+
+    return problem_status, lower_bound, upper_bound, solution_time

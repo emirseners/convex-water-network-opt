@@ -1,0 +1,43 @@
+
+Gurobi 13.0.2 (mac64[arm]) logging started Fri Jun 19 13:50:59 2026
+
+Set parameter LogFile to value "/Users/emirsener/Desktop/convex-water-network-opt/results/Anytown/gurobi_log.txt"
+Gurobi Optimizer version 13.0.2 build v13.0.2rc1 (mac64[arm] - Darwin 25.2.0 25C56)
+
+CPU model: Apple M3 Pro
+Thread count: 12 physical cores, 12 logical processors, using up to 12 threads
+
+Non-default parameters:
+TimeLimit  720
+MIPFocus  3
+
+Optimize a model with 504 rows, 840 columns and 1680 nonzeros (Min)
+Model fingerprint: 0x1c302aa6
+Model has 16 linear objective coefficients
+Model has 328 general nonlinear constraints (328 nonlinear terms)
+Variable types: 832 continuous, 8 integer (8 binary)
+Coefficient statistics:
+  Matrix range     [2e-01, 9e+01]
+  Objective range  [1e+00, 1e+02]
+  Bounds range     [8e-02, 2e+02]
+  RHS range        [8e-03, 2e+02]
+  NLCon coe range  [1e+01, 1e+04]
+
+Added 328 variables to disaggregate expressions
+Presolve removed 37 rows and 53 columns
+Presolve time: 0.00s
+Presolved: 3395 rows, 1116 columns, 7448 nonzeros
+Presolved model has 328 nonlinear constraint(s)
+
+Solving non-convex MINLP to global optimality
+
+Variable types: 1108 continuous, 8 integer (8 binary)
+Found heuristic solution: objective 0.0000000
+
+Explored 1 nodes (0 simplex iterations) in 0.26 seconds (0.31 work units)
+Thread count was 12 (of 12 available processors)
+
+Solution count 1: 0 
+
+Optimal solution found (tolerance 1.00e-04)
+Best objective 0.000000000000e+00, best bound 0.000000000000e+00, gap 0.0000%

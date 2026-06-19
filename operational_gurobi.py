@@ -86,7 +86,7 @@ def AddTankHeadConstraints(model):
         for t in model._set_of_time_periods:
             model.addConstr(model._head[tank,t] == model._tanks[tank].elevation + ((1 / model._tanks[tank].area) * model._storage[tank,t]), name=f'tank_head({tank},{t})')
 
-def GurobiOperationalModel(epanet_model, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation):
+def GurobiOperationalModel(epanet_model, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation):
     model = Model(epanet_model)
     model._junctions, model._tanks, model._pipes, model._pumps, model._valves, model._time_steps = junctions, tanks, pipes, pumps, valves, time_steps
     model._nodes, model._links = junctions | tanks, pipes | pumps | valves
@@ -103,14 +103,23 @@ def GurobiOperationalModel(epanet_model, junctions, tanks, pipes, pumps, valves,
     AddJunctionBalanceConstraints(model)
     AddTankHeadConstraints(model)
 
-    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results')
-    os.makedirs(results_dir, exist_ok=True)
-
-    #lp_filename=os.path.join(results_dir, f'{epanet_model}.lp')
+    #lp_filename=os.path.join(results_directory, 'gurobi_model.lp')
     #model.write(lp_filename)
-    model.setParam('TimeLimit', 3600)
+    model.setParam('TimeLimit', 720)
     model.setParam('MIPFocus', 3)
-    log_file_path = os.path.join(results_dir, epanet_model + 'GurobiLog.txt')
+    log_file_path = os.path.join(results_directory, 'gurobi_log.txt')
     model.setParam('LogFile', log_file_path)
 
     model.optimize()
+
+    problem_status = 'feasible' if model.SolCount > 0 else 'infeasible' if model.Status == GRB.INFEASIBLE else 'nosolution'
+
+    lower_bound = model.ObjBound if problem_status == 'feasible' else None
+    upper_bound = model.ObjVal if problem_status == 'feasible' else None
+    solution_time = model.Runtime
+
+    #model.write(os.path.join(results_directory, 'gurobi_solution.sol'))
+
+    model.dispose()
+
+    return problem_status, lower_bound, upper_bound, solution_time

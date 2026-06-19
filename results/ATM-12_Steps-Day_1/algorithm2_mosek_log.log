@@ -1,0 +1,80 @@
+Problem
+  Name                   : ATM-12_Steps-Day_1
+  Objective sense        : minimize        
+  Type                   : CONIC (conic optimization problem)
+  Constraints            : 2424            
+  Affine conic cons.     : 1020 (3060 rows)
+  Disjunctive cons.      : 0               
+  Cones                  : 0               
+  Scalar variables       : 2883            
+  Matrix variables       : 0               
+  Integer variables      : 36              
+
+Optimizer started.
+Mixed integer optimizer started.
+Threads used: 12
+Presolve started.
+Presolve terminated. Time = 0.04, probing time =  0.02
+Presolved problem: 4306 variables, 2866 constraints, 8285 non-zeros
+Presolved problem: 0 general integer, 36 binary, 4270 continuous
+Presolved problem: 1020 cones
+Clique table size: 0
+Symmetry factor  : 0.02 (detection time = 0.00)
+BRANCHES RELAXS   ACT_NDS  DEPTH    BEST_INT_OBJ         BEST_RELAX_OBJ       REL_GAP(%)  TIME  
+0        0        1        0        NA                   NA                   NA          0.0   
+0        1        1        0        NA                   5.9492252867e+02     NA          0.1   
+0        1        1        0        3.6000000744e+03     5.9492252867e+02     83.47       0.4   
+Root cut generation started.
+0        1        1        0        3.6000000744e+03     5.9492252709e+02     83.47       0.5   
+0        2        1        0        3.6000000744e+03     6.0000007685e+02     83.33       0.6   
+Root cut generation terminated. Time = 0.04
+9        13       10       3        3.6000000744e+03     6.0000008150e+02     83.33       1.5   
+20       24       15       4        3.6000000744e+03     6.0000008150e+02     83.33       1.9   
+31       35       24       5        3.6000000744e+03     6.0000008150e+02     83.33       2.2   
+45       51       30       7        3.6000000744e+03     6.0000008150e+02     83.33       2.7   
+69       80       44       9        8.0000007595e+02     6.0000008150e+02     25.00       3.4   
+104      120      57       6        7.0000007704e+02     6.0683971573e+02     13.31       4.3   
+152      178      69       8        7.0000007555e+02     6.1852424479e+02     11.64       5.4   
+212      245      67       11       7.0000007555e+02     6.1852424479e+02     11.64       6.8   
+272      322      73       13       7.0000007555e+02     6.1852424479e+02     11.64       8.6   
+344      411      75       16       7.0000007555e+02     6.1852424479e+02     11.64       10.5  
+414      500      95       9        7.0000007555e+02     6.1852424479e+02     11.64       12.3  
+498      605      97       10       7.0000007555e+02     6.1852425547e+02     11.64       14.3  
+594      729      89       10       7.0000007555e+02     6.2588307148e+02     10.59       16.9  
+677      825      72       13       7.0000007555e+02     6.3336294017e+02     9.52        19.0  
+749      907      64       10       7.0000007555e+02     6.5387168354e+02     6.59        21.0  
+808      972      53       12       7.0000007555e+02     6.6207134934e+02     5.42        22.6  
+854      1017     41       14       7.0000007555e+02     6.7211635149e+02     3.98        23.8  
+887      1051     34       14       7.0000007555e+02     6.7242001949e+02     3.94        24.8  
+911      1073     26       20       7.0000007555e+02     6.7258564353e+02     3.92        25.4  
+933      1094     22       22       7.0000007555e+02     6.7651100630e+02     3.36        26.1  
+951      1108     14       21       7.0000007555e+02     6.8119477336e+02     2.69        26.7  
+969      1119     4        18       7.0000007555e+02     6.8119477336e+02     2.69        27.7  
+984      1131     5        20       7.0000007555e+02     6.8119477336e+02     2.69        29.2  
+An optimal solution satisfying the relative gap tolerance of 1.00e-02(%) has been located.
+The relative gap is 0.00e+00(%).
+An optimal solution satisfying the absolute gap tolerance of 0.00e+00 has been located.
+The absolute gap is 0.00e+00.
+
+Objective of best integer solution : 7.000000755525e+02      
+Best objective bound               : 7.000000755525e+02      
+Initial feasible solution objective: Undefined
+Construct solution objective       : Not employed
+User objective cut value           : Not employed
+Number of cuts generated           : 1
+  Number of knapsack_cover cuts    : 1
+Number of branches                 : 989
+Number of relaxations solved       : 1134
+Number of interior point iterations: 43952
+Number of simplex iterations       : 0
+Time spend presolving the root     : 0.04
+Time spend optimizing the root     : 0.11
+Mixed integer optimizer terminated. Time: 29.59
+
+Optimizer terminated. Time: 29.59   
+
+
+Integer solution solution summary
+  Problem status  : PRIMAL_FEASIBLE
+  Solution status : INTEGER_OPTIMAL
+  Primal.  obj: 7.0000007555e+02    nrm: 5e+04    Viol.  con: 1e-07    var: 0e+00    acc: 6e-13    itg: 0e+00  

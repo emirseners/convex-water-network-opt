@@ -1,3 +1,4 @@
+import os
 from mosek.fusion import *
 import mosek.fusion.pythonic
 import numpy as np
@@ -54,7 +55,7 @@ def DefineDecisionVariables(model):
 
 def DefineObjective(model):
     if len(model._set_of_pumps) > 0:
-        model.objective('objective', ObjectiveSense.Minimize, sum(pump.operational_cost[t] * model._flow[model._set_of_links.index(pump.label), t] + pump.fixed_cost[t] * model._pump_status[i, t] for i, pump in enumerate(model._pumps.values()) for t in model._set_of_time_periods))
+        model.objective('objective', ObjectiveSense.Minimize, Expr.dot(np.stack([pump.operational_cost for pump in model._pumps.values()]), Expr.vstack([model._flow[model._set_of_links.index(pump.label), :] for pump in model._pumps.values()])) + Expr.dot(np.stack([pump.fixed_cost for pump in model._pumps.values()]), model._pump_status))
     else:
         model.objective('objective', ObjectiveSense.Minimize, Expr.constTerm(0.0))
 
@@ -119,23 +120,33 @@ def AddValveHeadConstraints(model):
             model.constraint(f'cons_valve_head_l_{valve.label}_{t}', model._head[model._set_of_nodes.index(valve.start_node.label), t] - model._head[model._set_of_nodes.index(valve.end_node.label), t] - ((1 - model._valve_status[i, t]) * (valve.start_node.head_lower_bound[t] - valve.end_node.head_upper_bound[t])) >= 0)
 
 def AddTankBalanceConstraints(model, hydraulic_timestep): #m^3 / s == m^3
-    for i, tank in enumerate(model._tanks.values()):    
+    for i, tank in enumerate(model._tanks.values()):
+        incidence = np.zeros(len(model._set_of_links))
+        for edge in tank.incoming_edges:
+            incidence[model._set_of_links.index(edge.label)] += 1.0
+        for edge in tank.outgoing_edges:
+            incidence[model._set_of_links.index(edge.label)] -= 1.0
         for t in model._set_of_time_periods:
-            model.constraint(f'cons_tank_balance_{tank.label}_{t}', hydraulic_timestep * sum(model._flow[model._set_of_links.index(edge.label), t] for edge in tank.incoming_edges) - hydraulic_timestep * sum(model._flow[model._set_of_links.index(edge.label), t] for edge in tank.outgoing_edges) - model._storage[i, t+1] + model._storage[i, t] == 0)
+            model.constraint(f'cons_tank_balance_{tank.label}_{t}', hydraulic_timestep * Expr.dot(incidence, model._flow[:, t]) - model._storage[i, t+1] + model._storage[i, t] == 0)
 
 def AddJunctionBalanceConstraints(model): #m^3 / s == m^3
     for junction in model._junctions.values():
+        if junction.segment == 'reservoir':
+            continue
+        incidence = np.zeros(len(model._set_of_links))
+        for edge in junction.incoming_edges:
+            incidence[model._set_of_links.index(edge.label)] += 1.0
+        for edge in junction.outgoing_edges:
+            incidence[model._set_of_links.index(edge.label)] -= 1.0
         for t in model._set_of_time_periods:
-            if junction.segment == 'reservoir':
-                continue
-            model.constraint(f'cons_junction_balance_{junction.label}_{t}', sum(model._flow[model._set_of_links.index(edge.label), t] for edge in junction.incoming_edges) - sum(model._flow[model._set_of_links.index(edge.label), t] for edge in junction.outgoing_edges) - junction.net_demand[t] == 0)
+            model.constraint(f'cons_junction_balance_{junction.label}_{t}', Expr.dot(incidence, model._flow[:, t]) - junction.net_demand[t] == 0)
 
 def AddTankHeadConstraints(model):
     for i, tank in enumerate(model._tanks.values()):    
         for t in model._set_of_time_periods:
             model.constraint(f'cons_tank_head_{tank.label}_{t+1}', model._head[model._set_of_nodes.index(tank.label), t] == tank.elevation + ((1 / tank.area) * model._storage[i, t+1]))
 
-def MosekOperationalModel(epanet_model, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation):
+def MosekOperationalModel(epanet_model, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation):
     model = Model(epanet_model)
     model._junctions, model._tanks, model._pipes, model._pumps, model._valves, model._time_steps = junctions, tanks, pipes, pumps, valves, time_steps
     model._nodes, model._links = junctions | tanks, pipes | pumps | valves
@@ -157,10 +168,33 @@ def MosekOperationalModel(epanet_model, junctions, tanks, pipes, pumps, valves, 
         AddTankBalanceConstraints(model, hydraulic_timestep)
         AddTankHeadConstraints(model)
 
-    #model.writeTask("results/mosek_model.ptf")
-    model.setLogHandler(sys.stdout)
-    model.setSolverParam("mioMaxTime", 3600)
+    model.setSolverParam("mioMaxTime", 720)
+    #model.setSolverParam("ptfWriteSolutions", "on")
 
-    with open("results/mosek_solver.log", "w") as f:
+    with open(os.path.join(results_directory, "algorithm2_mosek_log.log"), "w") as f:
         model.setLogHandler(f)
         model.solve()
+
+    #model.writeTask(os.path.join(results_directory, "algorithm2_mosek_solution.ptf"))
+
+    model.acceptedSolutionStatus(AccSolutionStatus.Feasible)
+
+    problem_status = 'feasible' if model.getPrimalSolutionStatus() in (SolutionStatus.Optimal, SolutionStatus.Feasible) else 'infeasible' if model.getProblemStatus() == ProblemStatus.PrimalInfeasible else 'nosolution'
+
+    lower_bound = model.getSolverDoubleInfo("mioObjBound") if problem_status == 'feasible' else None
+    upper_bound = model.primalObjValue() if problem_status == 'feasible' else None
+    solution_time = model.getSolverDoubleInfo("optimizerTime")
+
+    pump_status = {} if problem_status == 'feasible' else None
+    if len(model._set_of_pumps) > 0 and problem_status == 'feasible':
+        pump_status_levels = np.rint(model._pump_status.level()).reshape(len(model._set_of_pumps), len(model._set_of_time_periods))
+        pump_status = {pump: pump_status_levels[i] for i, pump in enumerate(model._set_of_pumps)}
+
+    valve_status = {} if problem_status == 'feasible' else None
+    if len(model._set_of_valves) > 0 and problem_status == 'feasible':
+        valve_status_levels = np.rint(model._valve_status.level()).reshape(len(model._set_of_valves), len(model._set_of_time_periods))
+        valve_status = {valve: valve_status_levels[i] for i, valve in enumerate(model._set_of_valves)}
+
+    model.dispose()
+
+    return problem_status, pump_status, valve_status, lower_bound, upper_bound, solution_time

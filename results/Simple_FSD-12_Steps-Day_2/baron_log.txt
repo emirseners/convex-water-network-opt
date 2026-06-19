@@ -1,0 +1,46 @@
+Solver command line: ['/Users/emirsener/baron-osxarm64/baron', '/Users/emirsener/Desktop/convex-water-network-opt/results/Simple_FSD-12_Steps-Day_2/baron_zojntgpl/tmp386a1oe7.pyomo.bar']
+
+===========================================================================
+ BARON version 26.4.12. Built: OSX-64 2026-04-12 13:07:21           
+ Running on machine Emirs-MacBook-Pro-3.local
+
+ BARON is a product of The Optimization Firm. For more information and 
+ related optimization and data analytics products visit https://minlp.com.
+
+ Licensee: Ali Rana Atilgan and Burak Kocuk at Sabanci University, atilgan@sabanciuniv.edu and burak.kocuk@sabanciuniv.edu.
+
+ If you publish work using this software, please cite publications from
+ https://minlp.com/baron-publications, such as: 
+
+ Zhang, Y. and N. V. Sahinidis, Solving continuous and discrete
+ nonlinear programs with BARON, Comput Optim Appl, 92, 1123-1161, 2025. 
+ https://doi.org/10.1007/s10589-024-00633-0
+===========================================================================
+ This BARON run may utilize the following subsolver(s)
+ For LP/MIP/QP: ILOG CPLEX                                      
+ For NLP: IPOPT, FILTERSQP
+===========================================================================
+ Doing local search
+ Solving bounding LP
+ Starting multi-start local search
+ Done with local search
+===========================================================================
+  Iteration       Time (s)     Mem   Lower bound     Upper bound   Progress
+          1           0.86    24MB     1900.00        0.100000E+52    NA
+       3638+         30.86    81MB     1900.00        0.100000E+52    NA
+       7401          58.47    81MB    infinity        0.100000E+52  100.00%
+
+                         *** Normal completion ***            
+
+                   *** No feasible solution was found ***
+
+ Wall clock time:                    58.47
+ Total CPU time used:                58.47
+
+ Total no. of BaR iterations:      7401
+ Best solution found at node:        -3
+ Max. no. of nodes in memory:        35
+
+ All done
+===========================================================================
+

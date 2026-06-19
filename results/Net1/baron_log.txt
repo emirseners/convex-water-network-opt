@@ -1,0 +1,68 @@
+Solver command line: ['/Users/emirsener/baron-osxarm64/baron', '/Users/emirsener/Desktop/convex-water-network-opt/results/Net1/baron_414v8euf/tmpy31srth8.pyomo.bar']
+
+===========================================================================
+ BARON version 26.4.12. Built: OSX-64 2026-04-12 13:07:21           
+ Running on machine Emirs-MacBook-Pro-3.local
+
+ BARON is a product of The Optimization Firm. For more information and 
+ related optimization and data analytics products visit https://minlp.com.
+
+ Licensee: Ali Rana Atilgan and Burak Kocuk at Sabanci University, atilgan@sabanciuniv.edu and burak.kocuk@sabanciuniv.edu.
+
+ If you publish work using this software, please cite publications from
+ https://minlp.com/baron-publications, such as: 
+
+ Zhang, Y. and N. V. Sahinidis, Solving continuous and discrete
+ nonlinear programs with BARON, Comput Optim Appl, 92, 1123-1161, 2025. 
+ https://doi.org/10.1007/s10589-024-00633-0
+===========================================================================
+ This BARON run may utilize the following subsolver(s)
+ For LP/MIP/QP: ILOG CPLEX                                      
+ For NLP: IPOPT, FILTERSQP
+===========================================================================
+ Doing local search
+ Solving bounding LP
+ Starting multi-start local search
+ Done with local search
+===========================================================================
+  Iteration       Time (s)     Mem   Lower bound     Upper bound   Progress
+          1           3.85    34MB     801.350        0.100000E+52    NA
+*         2          10.52    92MB     801.350         1501.78        0.00%
+         74          40.52    92MB     801.350         1501.78        2.83%
+*        78          40.88    92MB     801.350         1201.44        7.83%
+        187+         70.91    92MB     801.350         1201.44        9.59%
+        602+        100.92    92MB     801.350         1201.44       10.05%
+       1156         130.94   102MB     801.350         1201.44       10.42%
+       1822         160.98   102MB     801.350         1201.44       10.64%
+       2521         190.99   112MB     801.350         1201.44       10.76%
+       3182         221.02   122MB     801.350         1201.44       10.88%
+       3815         251.03   122MB     801.350         1201.44       10.96%
+       4455         281.06   122MB     801.350         1201.44       11.10%
+       5083         311.10   132MB     801.350         1201.44       11.19%
+       5668         341.10   142MB     801.350         1201.44       11.32%
+       6277         371.10   152MB     801.350         1201.44       11.41%
+       6958         401.12   152MB     801.350         1201.44       11.48%
+       7603         431.15   162MB     801.350         1201.44       11.56%
+       8265         461.18   172MB     801.350         1201.44       11.61%
+       8915         491.18   172MB     801.350         1201.44       11.65%
+       9555         521.20   181MB     801.350         1201.44       11.70%
+      10267         551.23   191MB     801.350         1201.44       11.74%
+      10935         581.26   192MB     801.350         1201.44       11.79%
+      11618         611.31   201MB     801.350         1201.44       11.85%
+      12293         641.33   211MB     801.350         1201.44       11.89%
+      12982         671.37   211MB     801.350         1201.44       11.92%
+      13629         701.40   221MB     801.350         1201.44       11.96%
+      13961         720.01   226MB     801.350         1201.44       11.97%
+
+                    *** Max. allowable time exceeded ***      
+
+ Wall clock time:                   720.07
+ Total CPU time used:               720.01
+
+ Total no. of BaR iterations:     13961
+ Best solution found at node:        78
+ Max. no. of nodes in memory:      5114
+
+ All done
+===========================================================================
+
