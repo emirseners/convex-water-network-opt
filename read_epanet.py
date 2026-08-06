@@ -126,7 +126,7 @@ class Pump:
 
     #We only consider HEAD pumps. POWER pumps and variable speed pumps are neglected
     def add_head_curve(self, curve_a, curve_b, curve_c):
-        self.curve_a, self.curve_b, self.curve_c = curve_a, curve_b, curve_c if abs(curve_c - 1.0) > 1e-6 else 1
+        self.curve_a, self.curve_b, self.curve_c = curve_a, curve_b, curve_c if abs(curve_c - round(curve_c)) > 1e-4 else round(curve_c)
 
 def fetch_epanet_data(water_network_path, head_loss_equation):
     water_network = wntr.network.WaterNetworkModel(water_network_path)

@@ -17,7 +17,7 @@ def operational_problem_two_phased(epanet_model, results_directory, junctions, t
     for r in range(num_rounds):
 
         mosek_status, mosek_solution, mosek_lower_bound, mosek_upper_bound, mosek_solution_time = SolveMosekOperationalModel(mosek_model, 'two_phased mosek', results_directory)
-        write_results(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results'), 'results.txt', f'{epanet_model} | two_phased mosek | {mosek_status} | {mosek_lower_bound} | {mosek_upper_bound} | {mosek_solution_time} | - | {hull_facet_time if r == 0 else "-"}')
+        write_results(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results'), 'results.txt', f'{epanet_model} | two_phased mosek | {mosek_status} | {mosek_lower_bound:.2g} | {mosek_upper_bound:.2g} | {mosek_solution_time:.2g} | - | {hull_facet_time:.2g if r == 0 else "-"}')
 
         if mosek_status != 'feasible':
             mosek_model.dispose()
@@ -26,7 +26,7 @@ def operational_problem_two_phased(epanet_model, results_directory, junctions, t
         GurobiOperationalModel('two_phased mosek check', results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation, mosek_solution)
 
         ipopt_status, ipopt_solution, ipopt_lower_bound, ipopt_upper_bound, ipopt_solution_time = PyomoOperationalModel('two_phased', 'two_phased ipopt flow direction', results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation, mosek_solution, flow_direction)
-        write_results(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results'), 'results.txt', f'{epanet_model} | two_phased ipopt | {ipopt_status} | {ipopt_lower_bound} | {ipopt_upper_bound} | {ipopt_solution_time} | - | -')
+        write_results(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results'), 'results.txt', f'{epanet_model} | two_phased ipopt | {ipopt_status} | {ipopt_lower_bound:.2g} | {ipopt_upper_bound:.2g} | {ipopt_solution_time:.2g} | - | -')
 
         if len(pumps) + len(valves) == 0 or ipopt_status == 'feasible': break
 

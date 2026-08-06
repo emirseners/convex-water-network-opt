@@ -56,4 +56,4 @@ if __name__ == '__main__':
                 problem_status, solution, lower_bound, upper_bound, solution_time = PyomoOperationalModel(method, method, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation)
 
             if method != 'two_phased':
-                write_results(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results'), 'results.txt', f'{epanet_model} | {method} | {problem_status} | {lower_bound} | {upper_bound} | {solution_time} | {obbt_time if obbt_flag else '-'} | -')
+                write_results(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results'), 'results.txt', f'{epanet_model} | {method} | {problem_status} | {lower_bound:.2g} | {upper_bound:.2g} | {solution_time:.2g} | {obbt_time:.2g if obbt_flag else "-"} | -')

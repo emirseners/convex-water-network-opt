@@ -27,16 +27,31 @@ def solve_mosek_problem(sense, expression, binary=False):
     _cached_worker_model.objective('objective', sense, expression)
     try:
         _cached_worker_model.solve()
-        return _cached_worker_model.dualObjValue() if not binary else _cached_worker_model.getSolverDoubleInfo("mioObjBound")
     except (OptimizeError, SolutionError):
-        return None
+        return "unknown"
+
+    if _cached_worker_model.getProblemStatus() in (ProblemStatus.PrimalInfeasible, ProblemStatus.PrimalAndDualInfeasible): return "infeasible"
+
+    try:
+        if binary:
+            bound = _cached_worker_model.getSolverDoubleInfo("mioObjBound")
+        else:
+            dual_status = _cached_worker_model.getDualSolutionStatus()
+            if dual_status not in (SolutionStatus.Optimal, SolutionStatus.Feasible): return "unknown"
+            _cached_worker_model.acceptedSolutionStatus(AccSolutionStatus.Feasible)
+            bound = _cached_worker_model.dualObjValue()
+
+        return bound if np.isfinite(bound) else "unknown"
+
+    except SolutionError:
+        return "unknown"
 
 def solve_variable_bounds(expression, lower, upper, label=None, epsilon=1e-3):
     if upper - lower <= epsilon:
         return [lower, upper]
 
     value = solve_mosek_problem(ObjectiveSense.Minimize, expression)
-    if value is not None:
+    if value not in ['unknown', 'infeasible']:
         candidate = round_bound(value - epsilon * max(abs(value), 1), 'floor')
         if candidate > lower:
             lower = candidate
@@ -47,7 +62,7 @@ def solve_variable_bounds(expression, lower, upper, label=None, epsilon=1e-3):
                 _cached_worker_model._obbt_bound_cons[label + '_lb'] = cons
 
     value = solve_mosek_problem(ObjectiveSense.Maximize, expression)
-    if value is not None:
+    if value not in ['unknown', 'infeasible']:
         candidate = round_bound(value + epsilon * max(abs(value), 1), 'ceiling')
         if candidate < upper:
             upper = candidate
@@ -59,12 +74,25 @@ def solve_variable_bounds(expression, lower, upper, label=None, epsilon=1e-3):
 
     return [lower, upper]
 
-def adjust_bounds(_cached_worker_model, earlier_bounds, ahead_storage):
-    for pump, (lb, ub) in earlier_bounds['pump_status'].items():
-        _cached_worker_model._pumps[pump].decisions[0] = 1 if lb == ub == 1 else 0 if lb == ub == 0 else -1
+def solve_variable_binary(expression):
+    cons = _cached_worker_model.constraint(expression, Domain.equalsTo(1.0))
+    value = solve_mosek_problem(ObjectiveSense.Minimize, Expr.constTerm(0.0))
+    cons.remove()
+    if value == 'infeasible': return 0
 
-    for valve, (lb, ub) in earlier_bounds['valve_status'].items():
-        _cached_worker_model._valves[valve].decisions[0] = 1 if lb == ub == 1 else 0 if lb == ub == 0 else -1
+    cons = _cached_worker_model.constraint(expression, Domain.equalsTo(0.0))
+    value = solve_mosek_problem(ObjectiveSense.Minimize, Expr.constTerm(0.0))
+    cons.remove()
+    if value == 'infeasible': return 1
+
+    return -1
+
+def adjust_bounds(_cached_worker_model, earlier_bounds, current_storage, ahead_storage):
+    for pump, status in earlier_bounds['pump_status'].items():
+        _cached_worker_model._pumps[pump].decisions[0] = 1 if status == 1 else 0 if status == 0 else -1
+
+    for valve, status in earlier_bounds['valve_status'].items():
+        _cached_worker_model._valves[valve].decisions[0] = 1 if status == 1 else 0 if status == 0 else -1
 
     for link, (lb, ub) in earlier_bounds['flow'].items():
         _cached_worker_model._links[link].flow_lower_bound[0] = lb
@@ -74,9 +102,23 @@ def adjust_bounds(_cached_worker_model, earlier_bounds, ahead_storage):
         _cached_worker_model._nodes[node].head_lower_bound[0] = lb
         _cached_worker_model._nodes[node].head_upper_bound[0] = ub
 
-    for storage, (lb, ub) in earlier_bounds['storage'].items():
-        _cached_worker_model._tanks[storage].storage_lower_bound[0] = lb
-        _cached_worker_model._tanks[storage].storage_upper_bound[0] = ub
+    for i, tank in enumerate(_cached_worker_model._set_of_tanks):
+        _cached_worker_model._tanks[tank].storage_lower_bound[0] = current_storage[tank][0]
+        _cached_worker_model._tanks[tank].storage_upper_bound[0] = current_storage[tank][1]
+        _cached_worker_model._tanks[tank].storage_lower_bound[1] = ahead_storage[tank][0]
+        _cached_worker_model._tanks[tank].storage_upper_bound[1] = ahead_storage[tank][1]
+
+        storage_expressions = {f'external_storage_{i}_0_lb': _cached_worker_model._storage[i, 0] >= current_storage[tank][0],
+                               f'external_storage_{i}_0_ub': _cached_worker_model._storage[i, 0] <= current_storage[tank][1],
+                               f'external_storage_{i}_1_lb': _cached_worker_model._storage[i, 1] >= ahead_storage[tank][0],
+                               f'external_storage_{i}_1_ub': _cached_worker_model._storage[i, 1] <= ahead_storage[tank][1]}
+
+        for key in storage_expressions:
+            if key in _cached_worker_model._obbt_bound_cons:
+                _cached_worker_model._obbt_bound_cons[key].remove()
+
+        for key, expression in storage_expressions.items():
+            _cached_worker_model._obbt_bound_cons[key] = _cached_worker_model.constraint(expression)
 
     if len(_cached_worker_model._set_of_nodes) > 0:
         _cached_worker_model._head_lb.setValue(np.stack([_cached_worker_model._nodes[n].head_lower_bound for n in _cached_worker_model._set_of_nodes]))
@@ -89,24 +131,11 @@ def adjust_bounds(_cached_worker_model, earlier_bounds, ahead_storage):
         _cached_worker_model._flow_lb_pos.setValue(np.stack([np.maximum(_cached_worker_model._links[l].flow_lower_bound, 0.0) for l in _cached_worker_model._set_of_links]))
         _cached_worker_model._flow_ub_neg.setValue(np.stack([np.minimum(_cached_worker_model._links[l].flow_upper_bound, 0.0) for l in _cached_worker_model._set_of_links]))
 
-    if len(_cached_worker_model._set_of_tanks) > 0:
-        for i, tank in enumerate(_cached_worker_model._set_of_tanks):
-            if f'{tank}_s0_lb' in _cached_worker_model._obbt_bound_cons:
-                _cached_worker_model._obbt_bound_cons[f'{tank}_s0_lb'].remove()
-                _cached_worker_model._obbt_bound_cons[f'{tank}_s0_ub'].remove()
-                _cached_worker_model._obbt_bound_cons[f'{tank}_s1_lb'].remove()
-                _cached_worker_model._obbt_bound_cons[f'{tank}_s1_ub'].remove()
-            cons_s0_lb = _cached_worker_model.constraint(_cached_worker_model._storage[i,0] >= _cached_worker_model._tanks[tank].storage_lower_bound[0])
-            cons_s0_ub = _cached_worker_model.constraint(_cached_worker_model._storage[i,0] <= _cached_worker_model._tanks[tank].storage_upper_bound[0])
-            cons_s1_lb = _cached_worker_model.constraint(_cached_worker_model._storage[i,1] >= ahead_storage[tank][0])
-            cons_s1_ub = _cached_worker_model.constraint(_cached_worker_model._storage[i,1] <= ahead_storage[tank][1])
-            _cached_worker_model._obbt_bound_cons[f'{tank}_s0_lb'], _cached_worker_model._obbt_bound_cons[f'{tank}_s0_ub'], _cached_worker_model._obbt_bound_cons[f'{tank}_s1_lb'], _cached_worker_model._obbt_bound_cons[f'{tank}_s1_ub'] = cons_s0_lb, cons_s0_ub, cons_s1_lb, cons_s1_ub
-
-def perform_obbt(head_loss_equation, earlier_bounds = None, ahead_storage = None):
-    bounds = {'flow': {}, 'head': {}, 'pump_status': {}, 'valve_status': {}, 'storage_aggregated_flow': {}, 'storage': {}}
+def perform_obbt(head_loss_equation, earlier_bounds = None, current_storage = None, ahead_storage = None):
+    bounds = {'flow': {}, 'head': {}, 'storage': {}, 'pump_status': {}, 'valve_status': {}}
 
     if earlier_bounds is not None:
-        adjust_bounds(_cached_worker_model, earlier_bounds, ahead_storage)
+        adjust_bounds(_cached_worker_model, earlier_bounds, current_storage, ahead_storage)
 
         if len(_cached_worker_model._set_of_pipes) > 0:
             for cons in _cached_worker_model._pipe_facet_cons:
@@ -126,71 +155,31 @@ def perform_obbt(head_loss_equation, earlier_bounds = None, ahead_storage = None
     for node in _cached_worker_model._set_of_nodes:
         bounds['head'][node] = solve_variable_bounds(_cached_worker_model._head[_cached_worker_model._node_index[node],0], _cached_worker_model._nodes[node].head_lower_bound[0], _cached_worker_model._nodes[node].head_upper_bound[0], f'head_{_cached_worker_model._node_index[node]}_0')
 
+    for i, tank in enumerate(_cached_worker_model._tanks.values()):
+        bounds['storage'][tank.label] = solve_variable_bounds(_cached_worker_model._storage[i,1], tank.storage_lower_bound[1], tank.storage_upper_bound[1], f'storage_{i}_1')
+
     for pump_index, pump in enumerate(_cached_worker_model._set_of_pumps):
-        if _cached_worker_model._pumps[pump].decisions[0] != -1:
-            continue
-        lb, ub = solve_variable_bounds(_cached_worker_model._pump_status[pump_index,0], 0.0, 1.0)
-        if lb > 0.0:
+        if _cached_worker_model._pumps[pump].decisions[0] != -1: continue
+        status = solve_variable_binary(_cached_worker_model._pump_status[pump_index,0])
+        if status == 1:
             _cached_worker_model.constraint(_cached_worker_model._pump_status[pump_index,0], Domain.equalsTo(1.0))
-            lb = ub = 1.0
-        elif ub < 1.0:
+        elif status == 0:
             _cached_worker_model.constraint(_cached_worker_model._pump_status[pump_index,0], Domain.equalsTo(0.0))
-            lb = ub = 0.0
-        else:
-            lb, ub = 0.0, 1.0
-        bounds['pump_status'][pump] = [lb, ub]
+        bounds['pump_status'][pump] = status
 
     for valve_index, valve in enumerate(_cached_worker_model._set_of_valves):
-        if _cached_worker_model._valves[valve].decisions[0] != -1:
-            continue
-        lb, ub = solve_variable_bounds(_cached_worker_model._valve_status[valve_index,0], 0.0, 1.0)
-        if lb > 0.0:
+        if _cached_worker_model._valves[valve].decisions[0] != -1: continue
+        status = solve_variable_binary(_cached_worker_model._valve_status[valve_index,0])
+        if status == 1:
             _cached_worker_model.constraint(_cached_worker_model._valve_status[valve_index,0], Domain.equalsTo(1.0))
-            lb = ub = 1.0
-        elif ub < 1.0:
+        elif status == 0:
             _cached_worker_model.constraint(_cached_worker_model._valve_status[valve_index,0], Domain.equalsTo(0.0))
-            lb = ub = 0.0
-        else:
-            lb, ub = 0.0, 1.0
-        bounds['valve_status'][valve] = [lb, ub]
-
-    for tank in _cached_worker_model._set_of_tanks:
-        incoming = _cached_worker_model._tanks[tank].incoming_edges
-        outgoing = _cached_worker_model._tanks[tank].outgoing_edges
-        expression = Expr.add([_cached_worker_model._flow[_cached_worker_model._link_index[edge.label],0] for edge in incoming] + [Expr.neg(_cached_worker_model._flow[_cached_worker_model._link_index[edge.label],0]) for edge in outgoing])
-        lower = sum(bounds['flow'][edge.label][0] for edge in incoming) - sum(bounds['flow'][edge.label][1] for edge in outgoing)
-        upper = sum(bounds['flow'][edge.label][1] for edge in incoming) - sum(bounds['flow'][edge.label][0] for edge in outgoing)
-        bounds['storage_aggregated_flow'][tank] = solve_variable_bounds(expression, lower, upper, f'tank_flow_{tank}_0')
+        bounds['valve_status'][valve] = status
 
     return bounds
 
-def propagate_tank_storage(time_steps, tanks, results, hydraulic_timestep):
-    shrinkage = []
-    for label, tank in tanks.items():
-        reachable_lower = reachable_upper = tank.storage_initial
-        for time_step in range(1, time_steps + 1):
-            storage_inflow_lower, storage_inflow_upper = results[time_step-1]['storage_aggregated_flow'][label]
-            reachable_lower = max(round_bound(reachable_lower + (hydraulic_timestep * storage_inflow_lower), 'floor'), tank.storage_lower_bound[time_step], (tank.head_lower_bound[time_step] - tank.elevation) * tank.area if time_step != time_steps else tank.storage_lower_bound[time_step])
-            reachable_upper = min(round_bound(reachable_upper + (hydraulic_timestep * storage_inflow_upper), 'ceiling'), tank.storage_upper_bound[time_step], (tank.head_upper_bound[time_step] - tank.elevation) * tank.area if time_step != time_steps else tank.storage_upper_bound[time_step])
-
-            width = tank.area * (tank.head_upper_bound[time_step] - tank.head_lower_bound[time_step]) if time_step != time_steps else tank.storage_upper_bound[time_step] - tank.storage_lower_bound[time_step]
-
-            tank.storage_lower_bound[time_step] = reachable_lower
-            tank.storage_upper_bound[time_step] = reachable_upper
-
-            if time_step != time_steps:
-                tank.head_lower_bound[time_step] = round_bound(tank.elevation + (reachable_lower / tank.area), 'floor')
-                tank.head_upper_bound[time_step] = round_bound(tank.elevation + (reachable_upper / tank.area), 'ceiling')
-                results[time_step]['head'][label] = [tank.head_lower_bound[time_step], tank.head_upper_bound[time_step]]
-                results[time_step]['storage'][label] = [tank.storage_lower_bound[time_step], tank.storage_upper_bound[time_step]]
-
-            if width > 1e-9:
-                shrinkage.append(1 - ((reachable_upper - reachable_lower) / width))
-
-    return 100 * float(np.mean(shrinkage)) if shrinkage else 0.0
-
 def update_bounds(junctions, tanks, pipes, pumps, valves, results):
-    shrinkage = {'flow': [], 'head': [], 'pump_status': [], 'valve_status': []}
+    shrinkage = {'flow': [], 'head': [], 'storage': [], 'pump_status': [], 'valve_status': []}
     nodes, links = junctions | tanks, pipes | pumps | valves
 
     for time_step, result in results.items():
@@ -208,31 +197,54 @@ def update_bounds(junctions, tanks, pipes, pumps, valves, results):
             if width > 1e-9:
                 shrinkage['head'].append(1 - ((node.head_upper_bound[time_step] - node.head_lower_bound[time_step]) / width))
 
-        for label, (lb, ub) in result['pump_status'].items():
-            if pumps[label].decisions[time_step] != -1:
-                continue
-            if lb == ub == 1:
+        for label, (lb, ub) in result['storage'].items():
+            tank = tanks[label]
+            width = tank.storage_upper_bound[time_step+1] - tank.storage_lower_bound[time_step+1]
+            tank.storage_lower_bound[time_step+1], tank.storage_upper_bound[time_step+1] = max(tank.storage_lower_bound[time_step+1], lb), min(tank.storage_upper_bound[time_step+1], ub)
+            if width > 1e-9:
+                shrinkage['storage'].append(1 - ((tank.storage_upper_bound[time_step+1] - tank.storage_lower_bound[time_step+1]) / width))
+
+        for label, status in result['pump_status'].items():
+            if pumps[label].decisions[time_step] != -1: continue
+            if status == 1:
                 pumps[label].decisions[time_step] = 1
                 shrinkage['pump_status'].append(1)
-            elif lb == ub == 0:
+            elif status == 0:
                 pumps[label].decisions[time_step] = 0
                 pumps[label].flow_lower_bound[time_step], pumps[label].flow_upper_bound[time_step] = 0.0, 0.0
                 shrinkage['pump_status'].append(1)
                 result['flow'][label] = [0.0, 0.0]
 
-        for label, (lb, ub) in result['valve_status'].items():
-            if valves[label].decisions[time_step] != -1:
-                continue
-            if lb == ub == 1:
+        for label, status in result['valve_status'].items():
+            if valves[label].decisions[time_step] != -1: continue
+            if status == 1:
                 valves[label].decisions[time_step] = 1
                 shrinkage['valve_status'].append(1)
-            elif lb == ub == 0:
+            elif status == 0:
                 valves[label].decisions[time_step] = 0
                 valves[label].flow_lower_bound[time_step], valves[label].flow_upper_bound[time_step] = 0.0, 0.0
                 shrinkage['valve_status'].append(1)
                 result['flow'][label] = [0.0, 0.0]
 
-    return 100 * float(np.mean(shrinkage['flow'])) if shrinkage['flow'] else 0.0, 100 * float(np.mean(shrinkage['head'])) if shrinkage['head'] else 0.0, len(shrinkage['pump_status']), len(shrinkage['valve_status'])
+    for label, tank in tanks.items():
+        for time_step in range(len(tank.head_lower_bound)):
+            width = tank.storage_upper_bound[time_step] - tank.storage_lower_bound[time_step]
+
+            tank.storage_lower_bound[time_step] = max(tank.storage_lower_bound[time_step], round_bound((tank.head_lower_bound[time_step] - tank.elevation) * tank.area, 'floor'))
+            tank.storage_upper_bound[time_step] = min(tank.storage_upper_bound[time_step], round_bound((tank.head_upper_bound[time_step] - tank.elevation) * tank.area, 'ceiling'))
+
+            tank.head_lower_bound[time_step] = max(tank.head_lower_bound[time_step], round_bound(tank.elevation + (tank.storage_lower_bound[time_step] / tank.area), 'floor'))
+            tank.head_upper_bound[time_step] = min(tank.head_upper_bound[time_step], round_bound(tank.elevation + (tank.storage_upper_bound[time_step] / tank.area), 'ceiling'))
+
+            if width > 1e-9:
+                shrinkage['storage'].append(1 - ((tank.storage_upper_bound[time_step] - tank.storage_lower_bound[time_step]) / width))
+
+            results[time_step]['head'][label] = [tank.head_lower_bound[time_step], tank.head_upper_bound[time_step]]
+
+            if time_step > 0:
+                results[time_step - 1]['storage'][label] = [tank.storage_lower_bound[time_step], tank.storage_upper_bound[time_step]]
+
+    return 100 * float(np.mean(shrinkage['flow'])) if shrinkage['flow'] else 0.0, 100 * float(np.mean(shrinkage['head'])) if shrinkage['head'] else 0.0, 100 * float(np.mean(shrinkage['storage'])) if shrinkage['storage'] else 0.0, len(shrinkage['pump_status']), len(shrinkage['valve_status'])
 
 def mosek_obbt(junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation, results_directory, num_rounds = 15):
     write_results(results_directory, 'obbt_results.txt', f'OBBT | {time_steps} time steps', mode = 'w')
@@ -248,14 +260,14 @@ def mosek_obbt(junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_tim
 
     for r in range(num_rounds):
         round_start = time.time()
-        futures = {time_step: executors[time_step].submit(perform_obbt, head_loss_equation, results[time_step] if r else None, ahead_storage[time_step] if r else None) for time_step in range(time_steps)}
+        futures = {time_step: executors[time_step].submit(perform_obbt, head_loss_equation, results[time_step] if r else None, current_storage[time_step] if r else None, ahead_storage[time_step] if r else None) for time_step in range(time_steps)}
         results = {time_step: f.result() for time_step, f in futures.items()}
-        flow_shrinkage, head_shrinkage, pump_statuses_fixed, valve_statuses_fixed = update_bounds(junctions, tanks, pipes, pumps, valves, results)
-        propagate_storage_start = time.time()
-        storage_shrinkage = propagate_tank_storage(time_steps, tanks, results, hydraulic_timestep)
+        flow_shrinkage, head_shrinkage, storage_shrinkage, pump_statuses_fixed, valve_statuses_fixed = update_bounds(junctions, tanks, pipes, pumps, valves, results)
+
+        current_storage = {time_step: {label: [tank.storage_lower_bound[time_step], tank.storage_upper_bound[time_step]] for label, tank in tanks.items()} for time_step in range(time_steps)}
         ahead_storage = {time_step: {label: [tank.storage_lower_bound[time_step + 1], tank.storage_upper_bound[time_step + 1]] for label, tank in tanks.items()} for time_step in range(time_steps)}
 
-        write_results(results_directory, 'obbt_results.txt', f'Round {r+1} time : {time.time() - round_start} | Propagate storage time : {time.time() - propagate_storage_start}')
+        write_results(results_directory, 'obbt_results.txt', f'Round {r+1} time : {time.time() - round_start}')
         write_results(results_directory, 'obbt_results.txt', f"flow : {flow_shrinkage:.2f}% | head : {head_shrinkage:.2f}% | storage : {storage_shrinkage:.2f}% | pump_status fixed : {pump_statuses_fixed} | valve_status fixed : {valve_statuses_fixed}")
         write_results(results_directory, 'obbt_results.txt', f'-------------------------------------------')
         write_bounds(junctions, tanks, pipes, pumps, valves, time_steps, results_directory, sheet_name = f'bounds_obbt_{r}', output_file = 'decision_variable_bounds.xlsx')
