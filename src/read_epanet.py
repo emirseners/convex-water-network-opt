@@ -1,5 +1,5 @@
 from __future__ import annotations
-from helpers import round_bound, write_bounds
+from .helpers import round_bound, write_bounds
 import numpy as np
 import wntr
 
@@ -45,14 +45,11 @@ class Junction:
             self.head_upper_bound = np.array(head_upper_bound, dtype=float) if not hasattr(self, 'head_upper_bound') else np.minimum(head_upper_bound, self.head_upper_bound)
 
 class Tank:
-    def __init__(self, label: str, elevation: float, diameter: float, area: float, storage_initial: float, storage_lower_bound: np.array, storage_upper_bound: np.array):
+    def __init__(self, label: str, elevation: float, diameter: float, area: float):
         self.label = label
         self.elevation = elevation
         self.diameter = diameter
         self.area = area
-        self.storage_initial = storage_initial
-        self.storage_lower_bound = storage_lower_bound
-        self.storage_upper_bound = storage_upper_bound
         self.incoming_edges = []
         self.outgoing_edges = []
 
@@ -64,9 +61,20 @@ class Tank:
 
     def add_head_bounds(self, head_lower_bound=None, head_upper_bound=None):
         if head_lower_bound is not None:
-            self.head_lower_bound = np.array(head_lower_bound, dtype=float) if not hasattr(self, 'head_lower_bound') else np.maximum(head_lower_bound, self.head_lower_bound)
+            if not hasattr(self, 'head_lower_bound'):
+                self.head_lower_bound = head_lower_bound
+            elif head_lower_bound.shape == self.head_lower_bound[:-1].shape:
+                self.head_lower_bound[:-1] = np.maximum(head_lower_bound, self.head_lower_bound[:-1])
+            else:
+                self.head_lower_bound = np.maximum(head_lower_bound, self.head_lower_bound)
+
         if head_upper_bound is not None:
-            self.head_upper_bound = np.array(head_upper_bound, dtype=float) if not hasattr(self, 'head_upper_bound') else np.minimum(head_upper_bound, self.head_upper_bound)
+            if not hasattr(self, 'head_upper_bound'):
+                self.head_upper_bound = head_upper_bound
+            elif head_upper_bound.shape == self.head_upper_bound[:-1].shape:
+                self.head_upper_bound[:-1] = np.minimum(head_upper_bound, self.head_upper_bound[:-1])
+            else:
+                self.head_upper_bound = np.minimum(head_upper_bound, self.head_upper_bound)
 
 class Pipe:
     def __init__(self, label: str, start_node: Junction | Tank, end_node: Junction | Tank, length: float, diameter: float, roughness: float, loss_coefficient: float, check_valve: bool):
@@ -84,7 +92,7 @@ class Pipe:
             self.flow_lower_bound = np.array(flow_lower_bound, dtype=float) if not hasattr(self, 'flow_lower_bound') else np.maximum(flow_lower_bound, self.flow_lower_bound)
         if flow_upper_bound is not None:
             self.flow_upper_bound = np.array(flow_upper_bound, dtype=float) if not hasattr(self, 'flow_upper_bound') else np.minimum(flow_upper_bound, self.flow_upper_bound)
-        if self.check_valve and pass_valve:
+        if self.check_valve and pass_valve and hasattr(self, 'corresponding_check_valve'):
             self.corresponding_check_valve.add_flow_bounds(flow_lower_bound, flow_upper_bound, False)
 
 class Valve:
@@ -170,11 +178,11 @@ def fetch_epanet_data(water_network_path, head_loss_equation):
 
     for tank_name, each_tank in water_network.tanks():
         diameter = each_tank.diameter
-        area = ((diameter/2) ** 2) * np.pi
-        storage_initial = each_tank.init_level * area
-        storage_lower_bound = np.insert(np.repeat(each_tank.min_level * area, time_steps), 0, storage_initial)
-        storage_upper_bound = np.insert(np.repeat(each_tank.max_level * area, time_steps), 0, storage_initial)
-        tanks[tank_name] = Tank(tank_name, each_tank.elevation, diameter, area, storage_initial, storage_lower_bound, storage_upper_bound)
+        area = round(((diameter/2) ** 2) * np.pi, 4)
+        head_lower_bound = each_tank.elevation + np.insert(np.repeat(each_tank.min_level, time_steps), 0, each_tank.init_level)
+        head_upper_bound = each_tank.elevation + np.insert(np.repeat(each_tank.max_level, time_steps), 0, each_tank.init_level)
+        tanks[tank_name] = Tank(tank_name, each_tank.elevation, diameter, area)
+        tanks[tank_name].add_head_bounds(head_lower_bound, head_upper_bound)
 
     for junction_name, each_junction in water_network.junctions():
         junction_demand_pattern = each_junction.demand_pattern if each_junction.demand_pattern in patterns else global_demand_pattern
@@ -212,14 +220,14 @@ def fetch_epanet_data(water_network_path, head_loss_equation):
         # Currently, all input files have HW. If DW, then one should adjust coefficients with adequate units
         if head_loss_equation == 'HW':
             loss_coefficient = (10.67 * length) / ((roughness ** 1.852) * (diameter ** 4.8704))
-        else: #Reynolds dependent roughness coeff? Currently, we use Colebrook approximation
+        else: # Reynolds dependent roughness coeff? Currently, we use Colebrook approximation
             loss_coefficient = (8 * length * ((2 * np.log10((3.7 * diameter) / roughness)) ** (-2))) / ((np.pi ** 2) * 9.80665 * (diameter ** 5))
 
         pipes[pipe_name] = Pipe(pipe_name, start_node, end_node, length, diameter, roughness, loss_coefficient, check_valve)
         start_node.add_outgoing_edge(pipes[pipe_name])
         end_node.add_incoming_edge(pipes[pipe_name])
 
-    for valve_name, each_valve in water_network.valves():
+    for valve_name, each_valve in water_network.valves(): # Currently, no instance exists with valves other than check valves
         diameter = each_valve.diameter
         valve_type = each_valve.valve_type
 
@@ -252,11 +260,19 @@ def fetch_epanet_data(water_network_path, head_loss_equation):
 
     return junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_step_length
 
+def get_operational_head_bounds(node):
+    if isinstance(node, Tank):
+        return node.head_lower_bound[:-1], node.head_upper_bound[:-1]
+    return node.head_lower_bound, node.head_upper_bound
+
 def propagate_flow(edges, head_loss_equation):
     exponent = 1.852 if head_loss_equation == 'HW' else 2
     for edge in edges.values():
-        head_diff_lb = edge.start_node.head_lower_bound - edge.end_node.head_upper_bound
-        head_diff_ub = edge.start_node.head_upper_bound - edge.end_node.head_lower_bound
+        start_head_lower_bound, start_head_upper_bound = get_operational_head_bounds(edge.start_node)
+        end_head_lower_bound, end_head_upper_bound = get_operational_head_bounds(edge.end_node)
+        head_diff_lb = start_head_lower_bound - end_head_upper_bound
+        head_diff_ub = start_head_upper_bound - end_head_lower_bound
+
         if isinstance(edge, Pipe):
             edge.add_flow_bounds(round_bound(np.sign(head_diff_lb) * ((np.abs(head_diff_lb) / edge.loss_coefficient) ** (1 / exponent)), 'floor'), round_bound(np.sign(head_diff_ub) * ((np.abs(head_diff_ub) / edge.loss_coefficient) ** (1 / exponent)), 'ceiling'))
         elif isinstance(edge, Pump):
@@ -269,22 +285,24 @@ def propagate_head(nodes, head_loss_equation):
     exponent = 1.852 if head_loss_equation == 'HW' else 2
     for node in nodes.values():
         for edge in node.incoming_edges:
+            start_head_lower_bound, start_head_upper_bound = get_operational_head_bounds(edge.start_node)
             if isinstance(edge, Pipe):
-                node.add_head_bounds(round_bound(edge.start_node.head_lower_bound - head_loss(edge, edge.flow_upper_bound, exponent), 'floor'), round_bound(edge.start_node.head_upper_bound - head_loss(edge, edge.flow_lower_bound, exponent), 'ceiling'))
+                node.add_head_bounds(round_bound(start_head_lower_bound - head_loss(edge, edge.flow_upper_bound, exponent), 'floor'), round_bound(start_head_upper_bound - head_loss(edge, edge.flow_lower_bound, exponent), 'ceiling'))
             elif isinstance(edge, Valve):
-                node.add_head_bounds(round_bound(np.where(edge.decisions == 1, edge.start_node.head_lower_bound, -np.inf), 'floor'), round_bound(np.where(edge.decisions == 1, edge.start_node.head_upper_bound, np.inf), 'ceiling'))
+                node.add_head_bounds(round_bound(np.where(edge.decisions == 1, start_head_lower_bound, -np.inf), 'floor'), round_bound(np.where(edge.decisions == 1, start_head_upper_bound, np.inf), 'ceiling'))
             else:
-                node.add_head_bounds(round_bound(np.where(edge.decisions == 1, edge.start_node.head_lower_bound + edge.curve_a + (edge.curve_b * (edge.flow_upper_bound ** edge.curve_c)), -np.inf), 'floor'), round_bound(np.where(edge.decisions == 1, edge.start_node.head_upper_bound + edge.curve_a + (edge.curve_b * (edge.flow_lower_bound ** edge.curve_c)), np.inf), 'ceiling'))
+                node.add_head_bounds(round_bound(np.where(edge.decisions == 1, start_head_lower_bound + edge.curve_a + (edge.curve_b * (edge.flow_upper_bound ** edge.curve_c)), -np.inf), 'floor'), round_bound(np.where(edge.decisions == 1, start_head_upper_bound + edge.curve_a + (edge.curve_b * (edge.flow_lower_bound ** edge.curve_c)), np.inf), 'ceiling'))
 
         for edge in node.outgoing_edges:
+            end_head_lower_bound, end_head_upper_bound = get_operational_head_bounds(edge.end_node)
             if isinstance(edge, Pipe):
-                node.add_head_bounds(round_bound(edge.end_node.head_lower_bound + head_loss(edge, edge.flow_lower_bound, exponent), 'floor'), round_bound(edge.end_node.head_upper_bound + head_loss(edge, edge.flow_upper_bound, exponent), 'ceiling'))
+                node.add_head_bounds(round_bound(end_head_lower_bound + head_loss(edge, edge.flow_lower_bound, exponent), 'floor'), round_bound(end_head_upper_bound + head_loss(edge, edge.flow_upper_bound, exponent), 'ceiling'))
             elif isinstance(edge, Valve):
-                node.add_head_bounds(round_bound(np.where(edge.decisions == 1, edge.end_node.head_lower_bound, -np.inf), 'floor'), round_bound(np.where(edge.decisions == 1, edge.end_node.head_upper_bound, np.inf), 'ceiling'))
+                node.add_head_bounds(round_bound(np.where(edge.decisions == 1, end_head_lower_bound, -np.inf), 'floor'), round_bound(np.where(edge.decisions == 1, end_head_upper_bound, np.inf), 'ceiling'))
             else:
-                node.add_head_bounds(round_bound(np.where(edge.decisions == 1, edge.end_node.head_lower_bound - (edge.curve_a + (edge.curve_b * (edge.flow_lower_bound ** edge.curve_c))), -np.inf), 'floor'), round_bound(np.where(edge.decisions == 1, edge.end_node.head_upper_bound - (edge.curve_a + (edge.curve_b * (edge.flow_upper_bound ** edge.curve_c))), np.inf), 'ceiling'))
+                node.add_head_bounds(round_bound(np.where(edge.decisions == 1, end_head_lower_bound - (edge.curve_a + (edge.curve_b * (edge.flow_lower_bound ** edge.curve_c))), -np.inf), 'floor'), round_bound(np.where(edge.decisions == 1, end_head_upper_bound - (edge.curve_a + (edge.curve_b * (edge.flow_upper_bound ** edge.curve_c))), np.inf), 'ceiling'))
 
-def infere_decisions(pumps, valves, time_steps, epsilon=1e-4):
+def infere_decisions(pumps, valves, time_steps, epsilon=1e-3):
     for pump in pumps.values():
         for t in range(time_steps):
             if pump.decisions[t] != -1: continue
@@ -309,14 +327,11 @@ def set_bounds(junctions, tanks, pipes, pumps, valves, head_loss_equation, time_
         flow_upper_bound = (-pump.curve_a / pump.curve_b) ** (1 / pump.curve_c)
         pump.add_flow_bounds(np.zeros(time_steps), np.full(time_steps, flow_upper_bound))
 
-    for tank in tanks.values():
-        tank.add_head_bounds(tank.elevation + (tank.storage_lower_bound[:-1] / tank.area), tank.elevation + (tank.storage_upper_bound[:-1] / tank.area))
-
-    '''flow_capacity = np.array([np.maximum(junction.net_demand, 0) for junction in junctions.values() if junction.net_demand is not None]).sum(axis=0) + (np.sum([tank.storage_upper_bound[1:] - tank.storage_lower_bound[1:] for tank in tanks.values()], axis=0) / hydraulic_timestep)
+    '''flow_capacity = np.array([np.maximum(junction.net_demand, 0) for junction in junctions.values() if junction.net_demand is not None]).sum(axis=0) + (np.sum([tank.area * (tank.head_upper_bound[1:] - tank.head_lower_bound[1:]) for tank in tanks.values()], axis=0) / hydraulic_timestep)
     for link in (pipes | pumps | valves).values():
         link.add_flow_bounds(-flow_capacity, flow_capacity)'''
 
-    global_head_ub = np.max([junction.elevation for junction in junctions.values()] + [tank.head_upper_bound for tank in tanks.values()], axis=0) + sum((pump.curve_a for pump in pumps.values()), 0.0)
+    global_head_ub = np.max([junction.elevation for junction in junctions.values()] + [tank.head_upper_bound[:-1] for tank in tanks.values()], axis=0) + sum((pump.curve_a for pump in pumps.values()), 0.0)
 
     for junction in junctions.values():
         if junction.segment == 'reservoir': continue
@@ -338,10 +353,8 @@ def set_timesteps(junctions, tanks, pipes, pumps, valves, time_steps):
         junction.head_upper_bound = junction.head_upper_bound[time_steps]
 
     for tank in tanks.values():
-        tank.head_lower_bound = tank.head_lower_bound[time_steps]
-        tank.head_upper_bound = tank.head_upper_bound[time_steps]
-        tank.storage_lower_bound = tank.storage_lower_bound[time_steps + [time_steps[-1] + 1]]
-        tank.storage_upper_bound = tank.storage_upper_bound[time_steps + [time_steps[-1] + 1]]
+        tank.head_lower_bound = tank.head_lower_bound[time_steps + [time_steps[-1] + 1]]
+        tank.head_upper_bound = tank.head_upper_bound[time_steps + [time_steps[-1] + 1]]
 
     for pipe in pipes.values():
         pipe.flow_lower_bound = pipe.flow_lower_bound[time_steps]
@@ -358,3 +371,5 @@ def set_timesteps(junctions, tanks, pipes, pumps, valves, time_steps):
         pump.flow_lower_bound = pump.flow_lower_bound[time_steps]
         pump.flow_upper_bound = pump.flow_upper_bound[time_steps]
         pump.decisions = pump.decisions[time_steps]
+
+    return junctions, tanks, pipes, pumps, valves

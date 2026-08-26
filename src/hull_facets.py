@@ -14,6 +14,13 @@ def box_redundant(row, lower, upper, equality_flag):
     negligible = Fraction(1, 10 ** 11) * (largest - smallest)
     return (smallest >= -negligible and largest <= negligible) if equality_flag else (smallest >= -negligible)
 
+def scale_coefficients(a, b, c, d):
+    coeffs = np.array([a, b, c, d], dtype=float)
+    magnitudes = np.abs(coeffs[coeffs != 0])
+    geometric_mean = np.sqrt(magnitudes.min() * magnitudes.max())
+    coeffs /= geometric_mean
+    return coeffs[0], coeffs[1], coeffs[2], coeffs[3]
+
 def find_facets(extreme_pts, box, neg=False):
     if not extreme_pts:
         return []
@@ -46,6 +53,7 @@ def find_facets(extreme_pts, box, neg=False):
         if neg:
             a, b, c = b, a, -c
 
+        a, b, c, d = scale_coefficients(a, b, c, d)
         facets.append((a, b, c, d, "eq" if equality_flag else "ge"))
 
     return facets
@@ -137,6 +145,6 @@ def find_pump_facets(pumps, time_steps):
     for pump in pumps.values():
         pump.hull_facets = {}
         for t in range(time_steps):
-            if pump.flow_lower_bound[t] == pump.flow_upper_bound[t] or pump.curve_c == 1: continue
+            if pump.decisions[t] == 0 or pump.flow_lower_bound[t] == pump.flow_upper_bound[t] or pump.curve_c == 1: continue
             if pump.flow_upper_bound[t] > 0:
                 pump.hull_facets[t] = cached_facets(cache, operational_pump_hull_facets, pump.start_node.head_lower_bound[t], pump.start_node.head_upper_bound[t], pump.end_node.head_lower_bound[t], pump.end_node.head_upper_bound[t], pump.flow_lower_bound[t], pump.flow_upper_bound[t], pump.curve_a, -pump.curve_b, pump.curve_c)

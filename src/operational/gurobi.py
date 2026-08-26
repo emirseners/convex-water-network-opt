@@ -1,14 +1,13 @@
 import os
-from gurobipy import GRB, Model, quicksum, nlfunc
+import numpy as np
+from gurobipy import GRB, Model, Env, quicksum, nlfunc
 
 def _variable_bounds(model):
-    head_lower_bounds = {(node,t): model._nodes[node].head_lower_bound[t-1] for node in model._set_of_nodes for t in model._set_of_time_periods}
-    head_upper_bounds = {(node,t): model._nodes[node].head_upper_bound[t-1] for node in model._set_of_nodes for t in model._set_of_time_periods}
+    head_lower_bounds = {(node,t): model._nodes[node].head_lower_bound[t-1] for (node, t) in model._head_indices}
+    head_upper_bounds = {(node,t): model._nodes[node].head_upper_bound[t-1] for (node, t) in model._head_indices}
     flow_lower_bounds = {(link,t): model._links[link].flow_lower_bound[t-1] for link in model._set_of_links for t in model._set_of_time_periods}
     flow_upper_bounds = {(link,t): model._links[link].flow_upper_bound[t-1] for link in model._set_of_links for t in model._set_of_time_periods}
-    storage_lower_bounds = {(tank,t): model._tanks[tank].storage_lower_bound[t-1] for tank in model._set_of_tanks for t in model._set_of_time_periods_with_terminal}
-    storage_upper_bounds = {(tank,t): model._tanks[tank].storage_upper_bound[t-1] for tank in model._set_of_tanks for t in model._set_of_time_periods_with_terminal}
-    return head_lower_bounds, head_upper_bounds, flow_lower_bounds, flow_upper_bounds, storage_lower_bounds, storage_upper_bounds
+    return head_lower_bounds, head_upper_bounds, flow_lower_bounds, flow_upper_bounds
 
 def DefineSets(model):
     model._set_of_junctions = list(model._junctions.keys())
@@ -23,11 +22,11 @@ def DefineSets(model):
     model._set_of_links = list(model._links.keys())
 
 def DefineDecisionVariables(model):
-    head_lb, head_ub, flow_lb, flow_ub, storage_lb, storage_ub = _variable_bounds(model)
+    model._head_indices = ([(node,t) for node in model._set_of_nodes for t in model._set_of_time_periods] + [(tank, model._time_steps + 1) for tank in model._set_of_tanks])
+    head_lb, head_ub, flow_lb, flow_ub = _variable_bounds(model)
 
-    model._head = model.addVars([(node,t) for node in model._set_of_nodes for t in model._set_of_time_periods], vtype=GRB.CONTINUOUS, lb=head_lb, ub=head_ub, name="head")
+    model._head = model.addVars([(node,t) for (node,t) in model._head_indices], vtype=GRB.CONTINUOUS, lb=head_lb, ub=head_ub, name="head")
     model._flow = model.addVars([(link,t) for link in model._set_of_links for t in model._set_of_time_periods], vtype=GRB.CONTINUOUS, lb=flow_lb, ub=flow_ub, name="flow")
-    model._storage = model.addVars([(tank,t) for tank in model._set_of_tanks for t in model._set_of_time_periods_with_terminal], vtype=GRB.CONTINUOUS, lb=storage_lb, ub=storage_ub, name="storage")
     model._pump_status = model.addVars([(pump,t) for pump in model._set_of_pumps for t in model._set_of_time_periods], vtype=GRB.BINARY, name="pump_status")
     model._valve_status = model.addVars([(valve,t) for valve in model._set_of_valves for t in model._set_of_time_periods], vtype=GRB.BINARY, name="valve_status")
 
@@ -114,23 +113,20 @@ def AddValveHeadConstraints(model):
                 model.addConstr(model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] - ((model._valves[valve].start_node.head_lower_bound[t-1] - model._valves[valve].end_node.head_upper_bound[t-1]) * (1 - model._valve_status[valve,t])) >= 0, name=f'valve_head_l({valve},{t})')
                 model.addConstr(((model._valves[valve].start_node.head_upper_bound[t-1] - model._valves[valve].end_node.head_lower_bound[t-1]) * (1 - model._valve_status[valve,t])) - model._head[model._valves[valve].start_node.label,t] + model._head[model._valves[valve].end_node.label,t] >= 0, name=f'valve_head_u({valve},{t})')
 
-def AddTankBalanceConstraints(model, hydraulic_timestep): #m^3 / s == m^3
+def AddTankBalanceConstraints(model, hydraulic_timestep):
     for tank in model._set_of_tanks:
         for t in model._set_of_time_periods:
-            model.addConstr(hydraulic_timestep * quicksum(model._flow[edge.label,t] for edge in model._tanks[tank].incoming_edges) - hydraulic_timestep * quicksum(model._flow[edge.label,t] for edge in model._tanks[tank].outgoing_edges) == model._storage[tank,t+1] - model._storage[tank,t], name=f'tank_balance({tank},{t})')
+            model.addConstr((hydraulic_timestep / model._tanks[tank].area) * quicksum(model._flow[edge.label,t] for edge in model._tanks[tank].incoming_edges) - (hydraulic_timestep / model._tanks[tank].area) * quicksum(model._flow[edge.label,t] for edge in model._tanks[tank].outgoing_edges) == model._head[tank,t+1] - model._head[tank,t], name=f'tank_balance({tank},{t})')
 
 def AddJunctionBalanceConstraints(model): #m^3 / s == m^3
     for junction in model._set_of_non_reservoir_junctions:
         for t in model._set_of_time_periods:
             model.addConstr(quicksum(model._flow[edge.label,t] for edge in model._junctions[junction].incoming_edges) - quicksum(model._flow[edge.label,t] for edge in model._junctions[junction].outgoing_edges) == model._junctions[junction].net_demand[t-1], name=f'junction_balance({junction},{t})')
 
-def AddTankHeadConstraints(model):
-    for tank in model._set_of_tanks:
-        for t in model._set_of_time_periods:
-            model.addConstr(model._head[tank,t] == model._tanks[tank].elevation + ((1 / model._tanks[tank].area) * model._storage[tank,t]), name=f'tank_head({tank},{t})')
-
-def GurobiOperationalModel(model_name, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation, solution=None):
-    model = Model(model_name)
+def GurobiOperationalModel(model_name, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation, test_solution=None, test_continuous=True):
+    model_env = Env(empty=True)
+    model_env.start()
+    model = Model(model_name, env=model_env)
     model._junctions, model._tanks, model._pipes, model._pumps, model._valves, model._time_steps = junctions, tanks, pipes, pumps, valves, time_steps
     model._nodes, model._links = junctions | tanks, pipes | pumps | valves
 
@@ -144,15 +140,14 @@ def GurobiOperationalModel(model_name, results_directory, junctions, tanks, pipe
     AddValveHeadConstraints(model)
     AddTankBalanceConstraints(model, hydraulic_timestep)
     AddJunctionBalanceConstraints(model)
-    AddTankHeadConstraints(model)
 
-    if solution is not None:
+    if test_solution is not None:
         vars_to_fix = ([model._pump_status[pump,t] for pump in model._set_of_pumps for t in model._set_of_time_periods] + [model._valve_status[valve,t] for valve in model._set_of_valves for t in model._set_of_time_periods])
-        vals_to_fix = ([solution['pump_status'][pump][t-1] for pump in model._set_of_pumps for t in model._set_of_time_periods] + [solution['valve_status'][valve][t-1] for valve in model._set_of_valves for t in model._set_of_time_periods])
+        vals_to_fix = ([test_solution['pump_status'][pump][t-1] for pump in model._set_of_pumps for t in model._set_of_time_periods] + [test_solution['valve_status'][valve][t-1] for valve in model._set_of_valves for t in model._set_of_time_periods])
 
-        if 'mosek' not in model_name:
-            vars_to_fix += ([model._head[node,t] for node in model._set_of_nodes for t in model._set_of_time_periods] + [model._flow[link,t] for link in model._set_of_links for t in model._set_of_time_periods] + [model._storage[tank,t] for tank in model._set_of_tanks for t in model._set_of_time_periods_with_terminal])
-            vals_to_fix += ([solution['head'][node][t-1] for node in model._set_of_nodes for t in model._set_of_time_periods] + [solution['flow'][link][t-1] for link in model._set_of_links for t in model._set_of_time_periods] + [solution['storage'][tank][t-1] for tank in model._set_of_tanks for t in model._set_of_time_periods_with_terminal])
+        if test_continuous:
+            vars_to_fix += ([model._head[node,t] for (node,t) in model._head_indices] + [model._flow[link,t] for link in model._set_of_links for t in model._set_of_time_periods])
+            vals_to_fix += ([test_solution['head'][node][t-1] for (node,t) in model._head_indices] + [test_solution['flow'][link][t-1] for link in model._set_of_links for t in model._set_of_time_periods])
 
         model.setAttr("LB", vars_to_fix, vals_to_fix)
         model.setAttr("UB", vars_to_fix, vals_to_fix)
@@ -162,12 +157,13 @@ def GurobiOperationalModel(model_name, results_directory, junctions, tanks, pipe
     #model.write(lp_filename)
     model.setParam('TimeLimit', 600)
     #model.setParam('MIPFocus', 3)
+    model.setParam('Threads', 12)
     log_file_path = os.path.join(results_directory, f'{model_name}_log.txt')
     model.setParam('LogFile', log_file_path)
 
     model.optimize()
 
-    problem_status = 'feasible' if model.SolCount > 0 else 'infeasible' if model.Status == GRB.INFEASIBLE else 'nosolution'
+    problem_status = 'feasible' if model.SolCount > 0 else 'infeasible' if model.Status in (GRB.INFEASIBLE, GRB.INF_OR_UNBD) else 'nosolution'
 
     lower_bound = model.ObjBound if problem_status != 'infeasible' and abs(model.ObjBound) < GRB.INFINITY else None
     upper_bound = model.ObjVal if problem_status == 'feasible' else None
@@ -181,6 +177,21 @@ def GurobiOperationalModel(model_name, results_directory, junctions, tanks, pipe
 
     #model.write(os.path.join(results_directory, f'{model_name}_solution.sol'))
 
-    model.dispose()
+    solution = {} if problem_status == 'feasible' else None
+    if problem_status == 'feasible':
+        if len(model._set_of_nodes) > 0:
+            solution['head'] = {node: np.array([model._head[node, t].x for t in (model._set_of_time_periods if node in model._set_of_junctions else model._set_of_time_periods_with_terminal)]) for node in model._set_of_nodes}
 
-    return problem_status, lower_bound, upper_bound, solution_time
+        if len(model._set_of_links) > 0:
+            solution['flow'] = {link: np.array([model._flow[link, t].x for t in model._set_of_time_periods]) for link in model._set_of_links}
+
+        if len(model._set_of_pumps) > 0:
+            solution['pump_status'] = {pump: np.rint([model._pump_status[pump, t].x for t in model._set_of_time_periods]) for pump in model._set_of_pumps}
+
+        if len(model._set_of_valves) > 0:
+            solution['valve_status'] = {valve: np.rint([model._valve_status[valve, t].x for t in model._set_of_time_periods]) for valve in model._set_of_valves}
+
+    model.dispose()
+    model_env.dispose()
+
+    return problem_status, solution, lower_bound, upper_bound, solution_time

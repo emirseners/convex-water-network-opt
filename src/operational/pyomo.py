@@ -12,9 +12,6 @@ def _headbounds(model, i, t):
 def _flowbounds(model, i, t):
     return model._links[i].flow_lower_bound[t-1], model._links[i].flow_upper_bound[t-1]
 
-def _storage_bounds(model, i, t):
-    return model._tanks[i].storage_lower_bound[t-1], model._tanks[i].storage_upper_bound[t-1]
-
 def _pump_flow_head_loss_bounds(model, i, t):
     return -model._pumps[i].curve_b * (model._pumps[i].flow_lower_bound[t-1] ** model._pumps[i].curve_c), -model._pumps[i].curve_b * (model._pumps[i].flow_upper_bound[t-1] ** model._pumps[i].curve_c)
 
@@ -34,28 +31,21 @@ def DefineSets(model):
     model._set_of_links = pyo.Set(initialize=list(model._links.keys()))
 
 def DefineDecisionVariables(model, method, flow_direction, epsilon, initial_solution=None):
-    model._head = pyo.Var(model._set_of_nodes, model._set_of_time_periods, bounds=_headbounds)
+    model._head_indices = ([(node,t) for node in model._set_of_nodes for t in model._set_of_time_periods] + [(tank, model._time_steps + 1) for tank in model._set_of_tanks])
+    model._head = pyo.Var(model._head_indices, bounds=_headbounds)
     model._flow = pyo.Var(model._set_of_links, model._set_of_time_periods, bounds=_flowbounds)
-    model._storage = pyo.Var(model._set_of_tanks, model._set_of_time_periods_with_terminal, bounds=_storage_bounds)
     model._pump_flow_head_loss = pyo.Var(model._set_of_pumps, model._set_of_time_periods, bounds=_pump_flow_head_loss_bounds)
 
-    for node in model._set_of_nodes:
-        for t in model._set_of_time_periods:
-            lower, upper = _headbounds(model, node, t)
-            if lower == upper:
-                model._head[node,t].fix(lower)
+    for (node,t) in model._head_indices:
+        lower, upper = _headbounds(model, node, t)
+        if lower == upper:
+            model._head[node,t].fix(lower)
 
     for link in model._set_of_links:
         for t in model._set_of_time_periods:
             lower, upper = _flowbounds(model, link, t)
             if lower == upper:
                 model._flow[link,t].fix(lower)
-
-    for storage in model._set_of_tanks:
-        for t in model._set_of_time_periods_with_terminal:
-            lower, upper = _storage_bounds(model, storage, t)
-            if lower == upper:
-                model._storage[storage,t].fix(lower)
 
     if initial_solution is not None:
         model._pump_status = pyo.Param(model._set_of_pumps, model._set_of_time_periods, initialize={(pump, t): float(initial_solution['pump_status'][pump][t-1]) for pump in model._set_of_pumps for t in model._set_of_time_periods}, within=pyo.Binary)
@@ -64,7 +54,7 @@ def DefineDecisionVariables(model, method, flow_direction, epsilon, initial_solu
         for key, solutions in initial_solution.items():
             if key == 'head':
                 for node, heads in solutions.items():
-                    for t in model._set_of_time_periods:
+                    for t in (model._set_of_time_periods if node in model._set_of_junctions else model._set_of_time_periods_with_terminal):
                         model._head[node,t].value = min(max(heads[t-1], model._nodes[node].head_lower_bound[t-1]), model._nodes[node].head_upper_bound[t-1])
 
             elif key == 'flow':
@@ -72,7 +62,8 @@ def DefineDecisionVariables(model, method, flow_direction, epsilon, initial_solu
                     for t in model._set_of_time_periods:
                         if link in model._set_of_pumps:
                             if model._pump_status[link,t] == 1:
-                                model._flow[link,t].setlb(max(model._pumps[link].flow_lower_bound[t-1], epsilon))
+                                if model._flow[link,t].lb < model._flow[link,t].ub:
+                                    model._flow[link,t].setlb(max(model._pumps[link].flow_lower_bound[t-1], epsilon))
                                 model._flow[link,t].value = min(max(flows[t-1], model._flow[link,t].lb), model._flow[link,t].ub) #min(max(epsilon, flows[t-1], model._links[link].flow_lower_bound[t-1]), model._links[link].flow_upper_bound[t-1])
                             else:
                                 model._flow[link,t].fix(0.0)
@@ -89,12 +80,6 @@ def DefineDecisionVariables(model, method, flow_direction, epsilon, initial_solu
                                     model._flow[link,t].setub(min(model._pipes[link].flow_upper_bound[t-1], -epsilon))
                             model._flow[link,t].value = min(max(flows[t-1], model._flow[link,t].lb), model._flow[link,t].ub) #min(max(epsilon, flows[t-1], model._links[link].flow_lower_bound[t-1]), model._links[link].flow_upper_bound[t-1])
 
-            elif key == 'storage':
-                for tank, storages in solutions.items():
-                    for t in model._set_of_time_periods_with_terminal:
-                        lower, upper = _storage_bounds(model, tank, t)
-                        model._storage[tank,t].value = min(max(storages[t-1], lower), upper)
-
     else:
         model._pump_status = pyo.Var(model._set_of_pumps, model._set_of_time_periods, domain=pyo.UnitInterval if method in ['two_phased', 'ipopt'] else pyo.Binary)
         model._valve_status = pyo.Var(model._set_of_valves, model._set_of_time_periods, domain=pyo.UnitInterval if method in ['two_phased', 'ipopt'] else pyo.Binary)
@@ -102,7 +87,8 @@ def DefineDecisionVariables(model, method, flow_direction, epsilon, initial_solu
             for t in model._set_of_time_periods:
                 if model._pumps[pump].decisions[t-1] == 1:
                     model._pump_status[pump,t].fix(1)
-                    model._flow[pump,t].setlb(max(model._pumps[pump].flow_lower_bound[t-1], epsilon))
+                    if model._flow[pump,t].lb < model._flow[pump,t].ub:
+                        model._flow[pump,t].setlb(max(model._pumps[pump].flow_lower_bound[t-1], epsilon))
                 elif model._pumps[pump].decisions[t-1] == 0:
                     model._pump_status[pump,t].fix(0)
                     model._flow[pump,t].fix(0.0)
@@ -168,13 +154,10 @@ def AddValveHeadConstraints(model, initial_solution):
         model._cons_valve_head_u = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] <= (model._valves[valve].start_node.head_upper_bound[t-1] - model._valves[valve].end_node.head_lower_bound[t-1]) * (1 - model._valve_status[valve,t]) if model._valves[valve].decisions[t-1] == -1 else pyo.Constraint.Skip)
 
 def AddTankBalanceConstraints(model, hydraulic_timestep): #m^3 / s == m^3
-    model._cons_tank_balance = pyo.Constraint(model._set_of_tanks, model._set_of_time_periods, rule=lambda model, tank, t: hydraulic_timestep * sum(model._flow[edge.label,t] for edge in model._tanks[tank].incoming_edges) - hydraulic_timestep * sum(model._flow[edge.label,t] for edge in model._tanks[tank].outgoing_edges) == model._storage[tank,t+1] - model._storage[tank,t])
+    model._cons_tank_balance = pyo.Constraint(model._set_of_tanks, model._set_of_time_periods, rule=lambda model, tank, t: (hydraulic_timestep / model._tanks[tank].area) * sum(model._flow[edge.label,t] for edge in model._tanks[tank].incoming_edges) - (hydraulic_timestep / model._tanks[tank].area) * sum(model._flow[edge.label,t] for edge in model._tanks[tank].outgoing_edges) == model._head[tank,t+1] - model._head[tank,t])
 
 def AddJunctionBalanceConstraints(model): #m^3 / s == m^3
     model._cons_junction_balance = pyo.Constraint(model._set_of_non_reservoir_junctions, model._set_of_time_periods, rule=lambda model, junction, t: sum(model._flow[edge.label,t] for edge in model._junctions[junction].incoming_edges) - sum(model._flow[edge.label,t] for edge in model._junctions[junction].outgoing_edges) == model._junctions[junction].net_demand[t-1])
-
-def AddTankHeadConstraints(model):
-    model._cons_tank_head = pyo.Constraint(model._set_of_tanks, model._set_of_time_periods, rule=lambda model, tank, t: model._head[tank,t] == model._tanks[tank].elevation + ((1 / model._tanks[tank].area) * model._storage[tank,t]) if t > 1 else pyo.Constraint.Skip)
 
 def PyomoOperationalModel(method, epanet_model, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation, initial_solution = None, flow_direction = False, epsilon = 1e-12):
     model = pyo.ConcreteModel()
@@ -192,12 +175,11 @@ def PyomoOperationalModel(method, epanet_model, results_directory, junctions, ta
     AddValveHeadConstraints(model, initial_solution)
     AddTankBalanceConstraints(model, hydraulic_timestep)
     AddJunctionBalanceConstraints(model)
-    AddTankHeadConstraints(model)
 
     #with open(os.path.join(results_directory, 'pyomo_model.txt'), 'w') as f:
     #    model.pprint(ostream=f)
 
-    if method in ['two_phased', 'ipopt']:
+    if method in ['two_phased', 'callback', 'ipopt']:
         solver = pyo.SolverFactory('ipopt', executable=os.path.expanduser('~/.idaes/bin/ipopt'))
         solver.options['max_cpu_time'] = 600
         solver.options['bound_relax_factor'] = 0
@@ -215,6 +197,7 @@ def PyomoOperationalModel(method, epanet_model, results_directory, junctions, ta
     with tempfile.TemporaryDirectory(prefix=f'{epanet_model}_', dir=results_directory) as scratch:
         TempfileManager.tempdir = scratch
         results = solver.solve(model, tee=True, logfile=log_path, load_solutions=False)
+    TempfileManager.tempdir = None
     solution_time = time.time() - start_time
 
     acceptable = results.solver.termination_condition in [TerminationCondition.optimal, TerminationCondition.locallyOptimal, TerminationCondition.feasible]
@@ -231,13 +214,10 @@ def PyomoOperationalModel(method, epanet_model, results_directory, junctions, ta
     solution = {} if problem_status == 'feasible' else None
     if problem_status == 'feasible':
         if len(model._set_of_nodes) > 0:
-            solution['head'] = {node: np.array([pyo.value(model._head[node, t]) for t in model._set_of_time_periods]) for node in model._set_of_nodes}
+            solution['head'] = {node: np.array([pyo.value(model._head[node, t]) for t in (model._set_of_time_periods if node in model._set_of_junctions else model._set_of_time_periods_with_terminal)]) for node in model._set_of_nodes}
 
         if len(model._set_of_links) > 0:
             solution['flow'] = {link: np.array([pyo.value(model._flow[link, t]) for t in model._set_of_time_periods]) for link in model._set_of_links}
-
-        if len(model._set_of_tanks) > 0:
-            solution['storage'] = {tank: np.array([pyo.value(model._storage[tank, t]) for t in model._set_of_time_periods_with_terminal]) for tank in model._set_of_tanks}
 
         if len(model._set_of_pumps) > 0:
             solution['pump_status'] = {pump: np.array([pyo.value(model._pump_status[pump, t]) for t in model._set_of_time_periods]) for pump in model._set_of_pumps}
