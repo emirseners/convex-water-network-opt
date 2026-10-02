@@ -77,6 +77,20 @@ def AddPipeFacets(model):
                 else:
                     model._pipe_facet_cons.append(model.constraint(a * (model._head_pipe_start_plus[i, t] if orthant == 'pos' else model._head_pipe_start_minus[i, t]) + b * (model._head_pipe_end_plus[i, t] if orthant == 'pos' else model._head_pipe_end_minus[i, t]) + c * (model._flow_pipe_plus[i, t] if orthant == 'pos' else model._flow_pipe_minus[i, t]) == d * (model._flow_pipe_status[i, t] if orthant == 'pos' else 1 - model._flow_pipe_status[i, t])))
 
+def AddValveFacets(model):
+    model._valve_facet_cons = []
+    for i, valve in enumerate(model._valves.values()):
+        link_index = model._link_index[valve.label]
+        for (t, orthant), facets in valve.hull_facets.items():
+            for face in facets:
+                a, b, c, d, sense = face
+                if sense == 'ge':
+                    model._valve_facet_cons.append(model.constraint(a * model._head_valve_start_plus[i, t] + b * model._head_valve_end_plus[i, t] + c * model._flow[link_index, t] >= d * model._valve_status[i, t]))
+                elif sense == 'le':
+                    model._valve_facet_cons.append(model.constraint(a * model._head_valve_start_plus[i, t] + b * model._head_valve_end_plus[i, t] + c * model._flow[link_index, t] <= d * model._valve_status[i, t]))
+                else:
+                    model._valve_facet_cons.append(model.constraint(a * model._head_valve_start_plus[i, t] + b * model._head_valve_end_plus[i, t] + c * model._flow[link_index, t] == d * model._valve_status[i, t]))
+
 def AddPumpFacets(model):
     model._pump_facet_cons = []
     for i, pump in enumerate(model._pumps.values()):
@@ -91,8 +105,7 @@ def AddPumpFacets(model):
                 else:
                     model._pump_facet_cons.append(model.constraint(a * model._head_pump_start_one[i, t] + b * model._head_pump_end_one[i, t] + c * model._flow[link_index, t] == d * model._pump_status[i, t]))
 
-def AddHeadLossConstraints(model, head_loss_equation, binary_pipe): # May want to adjust coefficients for ill-posed models
-    exponent = 1.852 if head_loss_equation == 'HW' else 2
+def AddHeadLossConstraints(model, binary_pipe): # May want to adjust coefficients for ill-posed models
 
     if len(model._set_of_pipes) > 0:
         model._flow_pipe_plus = model.variable('flow_pipe_plus', [len(model._set_of_pipes), len(model._set_of_time_periods)], Domain.inRange(
@@ -122,7 +135,7 @@ def AddHeadLossConstraints(model, head_loss_equation, binary_pipe): # May want t
         link_index = model._link_index[pipe.label]
         for t in model._set_of_time_periods:
             if pipe.flow_upper_bound[t] == pipe.flow_lower_bound[t]:
-                model.constraint(f'cons_head_loss_eq_{pipe.label}_{t}', model._head[model._node_index[pipe.start_node.label], t] - model._head[model._node_index[pipe.end_node.label], t] == pipe.loss_coefficient * (1 if pipe.flow_upper_bound[t] > 0.0 else -1) * (abs(pipe.flow_upper_bound[t]) ** exponent))
+                model.constraint(f'cons_head_loss_eq_{pipe.label}_{t}', model._head[model._node_index[pipe.start_node.label], t] - model._head[model._node_index[pipe.end_node.label], t] == pipe.loss_coefficient * (1 if pipe.flow_upper_bound[t] > 0.0 else -1) * (abs(pipe.flow_upper_bound[t]) ** pipe.exponent))
                 model.constraint(f'fix_status_{pipe.label}_{t}', model._flow_pipe_status[i, t], Domain.equalsTo(1))
                 model.constraint(f'fix_head_plus_start_{pipe.label}_{t}', model._head_pipe_start_plus[i, t], Domain.equalsTo(0.0))
                 model.constraint(f'fix_head_plus_end_{pipe.label}_{t}', model._head_pipe_end_plus[i, t], Domain.equalsTo(0.0))
@@ -143,10 +156,10 @@ def AddHeadLossConstraints(model, head_loss_equation, binary_pipe): # May want t
                 model.constraint(f'cons_head_end_plus_u_{pipe.label}_{t}', model._head_pipe_end_plus[i, t]  <= model._flow_pipe_status[i, t] * model._head_ub.pick([[model._node_index[pipe.end_node.label], t]]))
                 model.constraint(f'cons_plus_flow_l_{pipe.label}_{t}', model._flow_pipe_plus[i, t] >= model._flow_pipe_status[i, t] * model._flow_lb_pos.pick([[link_index, t]]))
                 model.constraint(f'cons_plus_flow_u_{pipe.label}_{t}', model._flow_pipe_plus[i, t] <= model._flow_pipe_status[i, t] * model._flow_ub.pick([[link_index, t]]))
-                #model.constraint(Expr.vstack(model._head_pipe_start_plus[i, t] - model._head_pipe_end_plus[i, t], (pipe.loss_coefficient ** (1/(1-exponent))) * model._flow_pipe_status[i, t], model._flow_pipe_plus[i, t]), Domain.inPPowerCone(1/exponent))
-                model.constraint(Expr.vstack(model._head_pipe_start_plus[i, t] - model._head_pipe_end_plus[i, t], model._flow_pipe_status[i, t], (pipe.loss_coefficient ** (1 / exponent)) * model._flow_pipe_plus[i, t]), Domain.inPPowerCone(1 / exponent))
+                #model.constraint(Expr.vstack(model._head_pipe_start_plus[i, t] - model._head_pipe_end_plus[i, t], (pipe.loss_coefficient ** (1/(1-pipe.exponent))) * model._flow_pipe_status[i, t], model._flow_pipe_plus[i, t]), Domain.inPPowerCone(1/pipe.exponent))
+                model.constraint(Expr.vstack(model._head_pipe_start_plus[i, t] - model._head_pipe_end_plus[i, t], model._flow_pipe_status[i, t], (pipe.loss_coefficient ** (1 / pipe.exponent)) * model._flow_pipe_plus[i, t]), Domain.inPPowerCone(1 / pipe.exponent))
                 #if pipe.flow_upper_bound[t] != max(0.0, pipe.flow_lower_bound[t]):
-                    #model.constraint(f'cons_secant_plane_plus_{pipe.label}_{t}', model._head_pipe_start_plus[i, t] - model._head_pipe_end_plus[i, t] <= (pipe.loss_coefficient * (((model._flow_ub.pick([[link_index, t]]) ** exponent) - (max(0.0, model._flow_lb.pick([[link_index, t]])) ** exponent)) / (model._flow_ub.pick([[link_index, t]]) - max(0.0, model._flow_lb.pick([[link_index, t]])))) * (model._flow_pipe_plus[i, t] - (max(0.0, model._flow_lb.pick([[link_index, t]])) * model._flow_pipe_status[i, t]))) + (pipe.loss_coefficient * (max(0.0, model._flow_lb.pick([[link_index, t]])) ** exponent) * model._flow_pipe_status[i, t]))
+                    #model.constraint(f'cons_secant_plane_plus_{pipe.label}_{t}', model._head_pipe_start_plus[i, t] - model._head_pipe_end_plus[i, t] <= (pipe.loss_coefficient * (((model._flow_ub.pick([[link_index, t]]) ** pipe.exponent) - (max(0.0, model._flow_lb.pick([[link_index, t]])) ** pipe.exponent)) / (model._flow_ub.pick([[link_index, t]]) - max(0.0, model._flow_lb.pick([[link_index, t]])))) * (model._flow_pipe_plus[i, t] - (max(0.0, model._flow_lb.pick([[link_index, t]])) * model._flow_pipe_status[i, t]))) + (pipe.loss_coefficient * (max(0.0, model._flow_lb.pick([[link_index, t]])) ** pipe.exponent) * model._flow_pipe_status[i, t]))
 
             else:
                 model.constraint(f'fix_head_plus_start_{pipe.label}_{t}', model._head_pipe_start_plus[i, t], Domain.equalsTo(0.0))
@@ -160,10 +173,10 @@ def AddHeadLossConstraints(model, head_loss_equation, binary_pipe): # May want t
                 model.constraint(f'cons_head_end_minus_u_{pipe.label}_{t}', model._head_pipe_end_minus[i, t]  <= (1 - model._flow_pipe_status[i, t]) * model._head_ub.pick([[model._node_index[pipe.end_node.label], t]]))
                 model.constraint(f'cons_minus_flow_l_{pipe.label}_{t}', model._flow_pipe_minus[i, t] >= (1 - model._flow_pipe_status[i, t]) * model._flow_lb.pick([[link_index, t]]))
                 model.constraint(f'cons_minus_flow_u_{pipe.label}_{t}', model._flow_pipe_minus[i, t] <= (1 - model._flow_pipe_status[i, t]) * model._flow_ub_neg.pick([[link_index, t]]))
-                #model.constraint(Expr.vstack(model._head_pipe_end_minus[i, t] - model._head_pipe_start_minus[i, t], (pipe.loss_coefficient ** (1/(1-exponent))) * (1 - model._flow_pipe_status[i, t]), model._flow_pipe_minus[i, t]), Domain.inPPowerCone(1/exponent))
-                model.constraint(Expr.vstack(model._head_pipe_end_minus[i, t] - model._head_pipe_start_minus[i, t], 1 - model._flow_pipe_status[i, t], (pipe.loss_coefficient ** (1 / exponent)) * model._flow_pipe_minus[i, t]), Domain.inPPowerCone(1/exponent))
+                #model.constraint(Expr.vstack(model._head_pipe_end_minus[i, t] - model._head_pipe_start_minus[i, t], (pipe.loss_coefficient ** (1/(1-pipe.exponent))) * (1 - model._flow_pipe_status[i, t]), model._flow_pipe_minus[i, t]), Domain.inPPowerCone(1/pipe.exponent))
+                model.constraint(Expr.vstack(model._head_pipe_end_minus[i, t] - model._head_pipe_start_minus[i, t], 1 - model._flow_pipe_status[i, t], (pipe.loss_coefficient ** (1 / pipe.exponent)) * model._flow_pipe_minus[i, t]), Domain.inPPowerCone(1/pipe.exponent))
                 #if pipe.flow_lower_bound[t] != min(0.0, pipe.flow_upper_bound[t]):
-                    #model.constraint(f'cons_secant_plane_minus_{pipe.label}_{t}', model._head_pipe_start_minus[i, t] - model._head_pipe_end_minus[i, t] >= (pipe.loss_coefficient * ((((-model._flow_lb.pick([[link_index, t]])) ** exponent) - ((-min(0.0, model._flow_ub.pick([[link_index, t]]))) ** exponent)) / (min(0.0, model._flow_ub.pick([[link_index, t]])) - model._flow_lb.pick([[link_index, t]]))) * (model._flow_pipe_minus[i, t] - (model._flow_lb.pick([[link_index, t]]) * (1 - model._flow_pipe_status[i, t])))) - (pipe.loss_coefficient * ((-model._flow_lb.pick([[link_index, t]])) ** exponent) * (1 - model._flow_pipe_status[i, t])))
+                    #model.constraint(f'cons_secant_plane_minus_{pipe.label}_{t}', model._head_pipe_start_minus[i, t] - model._head_pipe_end_minus[i, t] >= (pipe.loss_coefficient * ((((-model._flow_lb.pick([[link_index, t]])) ** pipe.exponent) - ((-min(0.0, model._flow_ub.pick([[link_index, t]]))) ** pipe.exponent)) / (min(0.0, model._flow_ub.pick([[link_index, t]])) - model._flow_lb.pick([[link_index, t]]))) * (model._flow_pipe_minus[i, t] - (model._flow_lb.pick([[link_index, t]]) * (1 - model._flow_pipe_status[i, t])))) - (pipe.loss_coefficient * ((-model._flow_lb.pick([[link_index, t]])) ** pipe.exponent) * (1 - model._flow_pipe_status[i, t])))
 
             elif pipe.flow_upper_bound[t] > 0.0:
                 model.constraint(f'fix_head_minus_start_{pipe.label}_{t}', model._head_pipe_start_minus[i, t], Domain.equalsTo(0.0))
@@ -243,17 +256,27 @@ def AddPumpHeadConstraints(model): # Will focus on coefficient adjustments for i
                 #model.constraint(f'cons_secant_plane_{pump.label}_{t}', model._head_gain_flow[i, t] <= model._pump_status[i, t] * (model._flow_lb.pick([[link_index, t]]) ** pump.curve_c) + (((model._flow_ub.pick([[link_index, t]]) ** pump.curve_c) - (model._flow_lb.pick([[link_index, t]]) ** pump.curve_c)) / (model._flow_ub.pick([[link_index, t]]) - model._flow_lb.pick([[link_index, t]]))) * (model._flow[link_index, t] - (model._flow_lb.pick([[link_index, t]]) * model._pump_status[i, t])))
 
 def AddValveHeadConstraints(model):
-    for i, valve in enumerate(model._valves.values()):
-        start_node_index = model._node_index[valve.start_node.label]
-        end_node_index = model._node_index[valve.end_node.label]
-        for t in model._set_of_time_periods:
-            if valve.decisions[t] == 1:
-                model.constraint(f'cons_valve_head_eq_{valve.label}_{t}', model._head[start_node_index, t] == model._head[end_node_index, t])
-            elif valve.decisions[t] == -1:
-                model.constraint(f'cons_valve_head_u_{valve.label}_{t}', model._head_ub.pick([[start_node_index, t]]) - model._head_lb.pick([[end_node_index, t]]) - (model._valve_status[i, t] * model._head_ub.pick([[start_node_index, t]])) + (model._valve_status[i, t] * model._head_lb.pick([[end_node_index, t]])) - model._head[start_node_index, t] + model._head[end_node_index, t] >= 0)
-                model.constraint(f'cons_valve_head_l_{valve.label}_{t}', model._head[start_node_index, t] - model._head[end_node_index, t] - model._head_lb.pick([[start_node_index, t]]) + model._head_ub.pick([[end_node_index, t]]) + (model._valve_status[i, t] * model._head_lb.pick([[start_node_index, t]])) - (model._valve_status[i, t] * model._head_ub.pick([[end_node_index, t]])) >= 0)
+    model._head_valve_start_plus = model.variable('head_valve_start_plus', [len(model._set_of_valves), len(model._set_of_time_periods)], Domain.inRange(np.stack([np.minimum(valve.start_node.head_lower_bound[:model._time_steps], 0.0) for valve in model._valves.values()]), np.stack([np.maximum(valve.start_node.head_upper_bound[:model._time_steps], 0.0) for valve in model._valves.values()])))
+    model._head_valve_end_plus = model.variable('head_valve_end_plus', [len(model._set_of_valves), len(model._set_of_time_periods)], Domain.inRange(np.stack([np.minimum(valve.end_node.head_lower_bound[:model._time_steps], 0.0) for valve in model._valves.values()]), np.stack([np.maximum(valve.end_node.head_upper_bound[:model._time_steps], 0.0) for valve in model._valves.values()])))
 
-def AddTankBalanceConstraints(model, hydraulic_timestep): #m^3 / s == m^3
+    for i, valve in enumerate(model._valves.values()):
+        for t in model._set_of_time_periods:
+            model.constraint(f'cons_valve_head_start_zero_l_{valve.label}_{t}', (model._head[model._node_index[valve.start_node.label], t] - model._head_valve_start_plus[i, t]) >= (1 - model._valve_status[i, t]) * model._head_lb.pick([[model._node_index[valve.start_node.label], t]]))
+            model.constraint(f'cons_valve_head_start_zero_u_{valve.label}_{t}', (model._head[model._node_index[valve.start_node.label], t] - model._head_valve_start_plus[i, t]) <= (1 - model._valve_status[i, t]) * model._head_ub.pick([[model._node_index[valve.start_node.label], t]]))
+            model.constraint(f'cons_valve_head_end_zero_l_{valve.label}_{t}', (model._head[model._node_index[valve.end_node.label], t] - model._head_valve_end_plus[i, t]) >= (1 - model._valve_status[i, t]) * model._head_lb.pick([[model._node_index[valve.end_node.label], t]]))
+            model.constraint(f'cons_valve_head_end_zero_u_{valve.label}_{t}', (model._head[model._node_index[valve.end_node.label], t] - model._head_valve_end_plus[i, t]) <= (1 - model._valve_status[i, t]) * model._head_ub.pick([[model._node_index[valve.end_node.label], t]]))
+
+            model.constraint(f'cons_valve_head_start_plus_l_{valve.label}_{t}', model._head_valve_start_plus[i, t] >= model._valve_status[i, t] * model._head_lb.pick([[model._node_index[valve.start_node.label], t]]))
+            model.constraint(f'cons_valve_head_start_plus_u_{valve.label}_{t}', model._head_valve_start_plus[i, t] <= model._valve_status[i, t] * model._head_ub.pick([[model._node_index[valve.start_node.label], t]]))
+            model.constraint(f'cons_valve_head_end_plus_l_{valve.label}_{t}', model._head_valve_end_plus[i, t] >= model._valve_status[i, t] * model._head_lb.pick([[model._node_index[valve.end_node.label], t]]))
+            model.constraint(f'cons_valve_head_end_plus_u_{valve.label}_{t}', model._head_valve_end_plus[i, t] <= model._valve_status[i, t] * model._head_ub.pick([[model._node_index[valve.end_node.label], t]]))
+
+            if valve.flow_lower_bound[t] == valve.flow_upper_bound[t]:
+                model.constraint(f'cons_valve_fixed_head_loss_{valve.label}_{t}', model._head_valve_start_plus[i, t] - model._head_valve_end_plus[i, t] == valve.loss_coefficient * (valve.flow_lower_bound[t] ** valve.exponent) * model._valve_status[i, t])
+            elif valve.decisions[t] != 0:
+                model.constraint(Expr.vstack(model._head_valve_start_plus[i, t] - model._head_valve_end_plus[i, t], model._valve_status[i, t], (valve.loss_coefficient ** (1 / valve.exponent)) * model._flow[model._link_index[valve.label], t]), Domain.inPPowerCone(1 / valve.exponent))
+
+def AddTankBalanceConstraints(model, hydraulic_timestep):
     for i, tank in enumerate(model._tanks.values()):
         node_index = model._node_index[tank.label]
         incidence = np.zeros(len(model._set_of_links))
@@ -267,7 +290,7 @@ def AddTankBalanceConstraints(model, hydraulic_timestep): #m^3 / s == m^3
             else:
                 model.constraint(f'cons_tank_balance_{tank.label}_{t}', (hydraulic_timestep / tank.area) * Expr.dot(incidence, model._flow[:, t]) - model._tank_terminal_head[i] + model._head[node_index, t] == 0)
 
-def AddJunctionBalanceConstraints(model): #m^3 / s == m^3
+def AddJunctionBalanceConstraints(model):
     for junction in model._junctions.values():
         if junction.segment == 'reservoir':
             continue
@@ -294,7 +317,7 @@ def AddNoGoodCut(model, previous_solution, up_to=None):
 
     model.constraint(Expr.add(expression) <= np.sum(pump_incumbent) + np.sum(valve_incumbent) - 1)
 
-def MosekOperationalModel(model_name, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation, binary_pipe = False, binary_pump_valve = True, obbt = False):
+def MosekOperationalModel(model_name, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, time_limit, binary_pipe = False, binary_pump_valve = True, obbt = False):
     model = Model(model_name)
     model._junctions, model._tanks, model._pipes, model._pumps, model._valves, model._time_steps = junctions, tanks, pipes, pumps, valves, time_steps
     model._nodes, model._links = junctions | tanks, pipes | pumps | valves
@@ -307,7 +330,7 @@ def MosekOperationalModel(model_name, results_directory, junctions, tanks, pipes
         DefineObjective(model)
 
     if len(model._set_of_pipes) > 0:
-        AddHeadLossConstraints(model, head_loss_equation, binary_pipe)
+        AddHeadLossConstraints(model, binary_pipe)
         AddPipeFacets(model)
 
     if len(model._set_of_pumps) > 0:
@@ -317,6 +340,7 @@ def MosekOperationalModel(model_name, results_directory, junctions, tanks, pipes
     if len(model._set_of_valves) > 0:
         AddValveFlowConstraints(model)
         AddValveHeadConstraints(model)
+        AddValveFacets(model)
 
     if len(model._set_of_tanks) > 0:
         AddTankBalanceConstraints(model, hydraulic_timestep)
@@ -328,9 +352,9 @@ def MosekOperationalModel(model_name, results_directory, junctions, tanks, pipes
     model.setSolverParam('numThreads', 12)
 
     if (binary_pump_valve and (len(model._set_of_pumps) > 0 or len(model._set_of_valves) > 0)) or (binary_pipe and len(model._set_of_pipes) > 0):
-        model.setSolverParam('mioMaxTime', 600)
+        model.setSolverParam('mioMaxTime', time_limit)
     else:
-        model.setSolverParam('optimizerMaxTime', 600)
+        model.setSolverParam('optimizerMaxTime', time_limit)
 
     return model
 
@@ -347,8 +371,6 @@ def SolveMosekOperationalModel(model, model_name, results_directory, binary_pipe
         lower_bound = (model.getSolverDoubleInfo('mioObjBound') if (binary_pump_valve and (len(model._set_of_pumps) > 0 or len(model._set_of_valves) > 0)) or (binary_pipe and len(model._set_of_pipes) > 0) else model.dualObjValue()) if problem_status != 'infeasible' else None
     except SolutionError:
         lower_bound = None
-    upper_bound = model.primalObjValue() if problem_status == 'feasible' else None
-    solution_time = model.getSolverDoubleInfo('optimizerTime')
 
     solution = {} if problem_status == 'feasible' else None
     if problem_status == 'feasible':
@@ -373,4 +395,4 @@ def SolveMosekOperationalModel(model, model_name, results_directory, binary_pipe
             valve_status_solution_levels = np.rint(model._valve_status.level()).reshape(len(model._set_of_valves), len(model._set_of_time_periods))
             solution['valve_status'] = {valve: valve_status_solution_levels[i] for i, valve in enumerate(model._set_of_valves)}
 
-    return problem_status, solution, lower_bound, upper_bound, solution_time
+    return problem_status, solution, lower_bound

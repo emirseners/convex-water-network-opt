@@ -33,18 +33,17 @@ def DefineDecisionVariables(model):
 def DefineObjective(model):
     model.setObjective(quicksum(model._pumps[pump].fixed_cost[t-1] * model._pump_status[pump,t] + model._pumps[pump].operational_cost[t-1] * model._flow[pump,t] for pump in model._set_of_pumps for t in model._set_of_time_periods), GRB.MINIMIZE)
 
-def AddHeadLossConstraints(model, head_loss_equation):
+def AddHeadLossConstraints(model):
     head_loss_lower_bounds = {(pipe,t): model._pipes[pipe].start_node.head_lower_bound[t-1] - model._pipes[pipe].end_node.head_upper_bound[t-1] for pipe in model._set_of_pipes for t in model._set_of_time_periods}
     head_loss_upper_bounds = {(pipe,t): model._pipes[pipe].start_node.head_upper_bound[t-1] - model._pipes[pipe].end_node.head_lower_bound[t-1] for pipe in model._set_of_pipes for t in model._set_of_time_periods}
     head_loss = model.addVars([(pipe,t) for pipe in model._set_of_pipes for t in model._set_of_time_periods], vtype=GRB.CONTINUOUS, lb=head_loss_lower_bounds, ub=head_loss_upper_bounds, name="head_loss")
-    exponent = 1.852 if head_loss_equation == 'HW' else 2
     for pipe in model._set_of_pipes:
         for t in model._set_of_time_periods:
             if model._pipes[pipe].flow_lower_bound[t-1] == model._pipes[pipe].flow_upper_bound[t-1]:
-                model.addConstr(model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == model._pipes[pipe].loss_coefficient * (-1 if model._pipes[pipe].flow_lower_bound[t-1] < 0.0 else 1) * (abs(model._pipes[pipe].flow_lower_bound[t-1]) ** exponent), name=f'head_loss({pipe},{t})')
-                head_loss[pipe,t].lb = head_loss[pipe,t].ub = model._pipes[pipe].loss_coefficient * (-1 if model._pipes[pipe].flow_lower_bound[t-1] < 0.0 else 1) * (abs(model._pipes[pipe].flow_lower_bound[t-1]) ** exponent)
+                model.addConstr(model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == model._pipes[pipe].loss_coefficient * (-1 if model._pipes[pipe].flow_lower_bound[t-1] < 0.0 else 1) * (abs(model._pipes[pipe].flow_lower_bound[t-1]) ** model._pipes[pipe].exponent), name=f'head_loss({pipe},{t})')
+                head_loss[pipe,t].lb = head_loss[pipe,t].ub = model._pipes[pipe].loss_coefficient * (-1 if model._pipes[pipe].flow_lower_bound[t-1] < 0.0 else 1) * (abs(model._pipes[pipe].flow_lower_bound[t-1]) ** model._pipes[pipe].exponent)
             else:
-                model.addGenConstrNL(head_loss[pipe,t], model._pipes[pipe].loss_coefficient * nlfunc.signpow(model._flow[pipe,t], exponent=exponent), name=f'head_loss_def({pipe},{t})')
+                model.addGenConstrNL(head_loss[pipe,t], model._pipes[pipe].loss_coefficient * nlfunc.signpow(model._flow[pipe,t], exponent=model._pipes[pipe].exponent), name=f'head_loss_def({pipe},{t})')
                 model.addConstr(model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == head_loss[pipe,t], name=f'head_loss({pipe},{t})')
 
 def AddPumpFlowConstraints(model):
@@ -105,25 +104,35 @@ def AddPumpHeadConstraints(model):
                     model.addConstr((model._pumps[pump].start_node.head_upper_bound[t-1] - model._pumps[pump].end_node.head_lower_bound[t-1]) * (1 - model._pump_status[pump,t]) >= model._head[model._pumps[pump].start_node.label,t] - model._head[model._pumps[pump].end_node.label,t] + (model._pumps[pump].curve_a * model._pump_status[pump,t]) + head_gain_flow[pump,t], name=f'head_diff_upper({pump},{t})')
 
 def AddValveHeadConstraints(model):
+    head_loss_upper_bounds = {(valve,t): model._valves[valve].loss_coefficient * (model._valves[valve].flow_upper_bound[t-1] ** model._valves[valve].exponent) for valve in model._set_of_valves for t in model._set_of_time_periods}
+    valve_head_loss = model.addVars([(valve,t) for valve in model._set_of_valves for t in model._set_of_time_periods], vtype=GRB.CONTINUOUS, lb=0.0, ub=head_loss_upper_bounds, name="valve_head_loss")
+
     for valve in model._set_of_valves:
         for t in model._set_of_time_periods:
+            if model._valves[valve].decisions[t-1] == 0:
+                valve_head_loss[valve,t].lb = valve_head_loss[valve,t].ub = 0.0
+                continue
+            if model._valves[valve].flow_lower_bound[t-1] == model._valves[valve].flow_upper_bound[t-1]:
+                valve_head_loss[valve,t].lb = valve_head_loss[valve,t].ub = model._valves[valve].loss_coefficient * (model._valves[valve].flow_lower_bound[t-1] ** model._valves[valve].exponent)
+            else:
+                model.addGenConstrNL(valve_head_loss[valve,t], model._valves[valve].loss_coefficient * nlfunc.signpow(model._flow[valve,t], exponent=model._valves[valve].exponent), name=f'valve_head_loss_def({valve},{t})')
             if model._valves[valve].decisions[t-1] == 1:
-                model.addConstr(model._head[model._valves[valve].start_node.label,t] == model._head[model._valves[valve].end_node.label,t], name=f'valve_head_b({valve},{t})')
-            elif model._valves[valve].decisions[t-1] == -1:
-                model.addConstr(model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] - ((model._valves[valve].start_node.head_lower_bound[t-1] - model._valves[valve].end_node.head_upper_bound[t-1]) * (1 - model._valve_status[valve,t])) >= 0, name=f'valve_head_l({valve},{t})')
-                model.addConstr(((model._valves[valve].start_node.head_upper_bound[t-1] - model._valves[valve].end_node.head_lower_bound[t-1]) * (1 - model._valve_status[valve,t])) - model._head[model._valves[valve].start_node.label,t] + model._head[model._valves[valve].end_node.label,t] >= 0, name=f'valve_head_u({valve},{t})')
+                model.addConstr(model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] - valve_head_loss[valve,t] == 0, name=f'valve_head_loss({valve},{t})')
+            else:
+                model.addConstr(model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] - valve_head_loss[valve,t] >= (model._valves[valve].start_node.head_lower_bound[t-1] - model._valves[valve].end_node.head_upper_bound[t-1]) * (1 - model._valve_status[valve,t]), name=f'valve_head_loss_l({valve},{t})')
+                model.addConstr(model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] - valve_head_loss[valve,t] <= (model._valves[valve].start_node.head_upper_bound[t-1] - model._valves[valve].end_node.head_lower_bound[t-1]) * (1 - model._valve_status[valve,t]), name=f'valve_head_loss_u({valve},{t})')
 
 def AddTankBalanceConstraints(model, hydraulic_timestep):
     for tank in model._set_of_tanks:
         for t in model._set_of_time_periods:
             model.addConstr((hydraulic_timestep / model._tanks[tank].area) * quicksum(model._flow[edge.label,t] for edge in model._tanks[tank].incoming_edges) - (hydraulic_timestep / model._tanks[tank].area) * quicksum(model._flow[edge.label,t] for edge in model._tanks[tank].outgoing_edges) == model._head[tank,t+1] - model._head[tank,t], name=f'tank_balance({tank},{t})')
 
-def AddJunctionBalanceConstraints(model): #m^3 / s == m^3
+def AddJunctionBalanceConstraints(model):
     for junction in model._set_of_non_reservoir_junctions:
         for t in model._set_of_time_periods:
             model.addConstr(quicksum(model._flow[edge.label,t] for edge in model._junctions[junction].incoming_edges) - quicksum(model._flow[edge.label,t] for edge in model._junctions[junction].outgoing_edges) == model._junctions[junction].net_demand[t-1], name=f'junction_balance({junction},{t})')
 
-def GurobiOperationalModel(model_name, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation, test_solution=None, test_continuous=True):
+def GurobiOperationalModel(model_name, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, time_limit, test_solution=None, test_continuous=True):
     model_env = Env(empty=True)
     model_env.start()
     model = Model(model_name, env=model_env)
@@ -133,7 +142,7 @@ def GurobiOperationalModel(model_name, results_directory, junctions, tanks, pipe
     DefineSets(model)
     DefineDecisionVariables(model)
     DefineObjective(model)
-    AddHeadLossConstraints(model, head_loss_equation)
+    AddHeadLossConstraints(model)
     AddPumpFlowConstraints(model)
     AddValveFlowConstraints(model)
     AddPumpHeadConstraints(model)
@@ -155,7 +164,7 @@ def GurobiOperationalModel(model_name, results_directory, junctions, tanks, pipe
 
     #lp_filename=os.path.join(results_directory, f'{model_name}.lp')
     #model.write(lp_filename)
-    model.setParam('TimeLimit', 600)
+    model.setParam('TimeLimit', time_limit)
     #model.setParam('MIPFocus', 3)
     model.setParam('Threads', 12)
     log_file_path = os.path.join(results_directory, f'{model_name}_log.txt')

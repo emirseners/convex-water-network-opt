@@ -104,19 +104,18 @@ def DefineDecisionVariables(model, method, flow_direction, epsilon, initial_solu
 def DefineObjective(model):
     model.OBJ = pyo.Objective(rule=_objective_function, sense=pyo.minimize)
 
-def headloss_rule(model, pipe, t, epsilon, exponent):
+def headloss_rule(model, pipe, t, epsilon):
     if model._pipes[pipe].flow_lower_bound[t-1] == model._pipes[pipe].flow_upper_bound[t-1]:
-        return model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == model._pipes[pipe].loss_coefficient * (-1 if model._pipes[pipe].flow_lower_bound[t-1] < 0.0 else 1) * (abs(model._pipes[pipe].flow_lower_bound[t-1]) ** exponent)
+        return model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == model._pipes[pipe].loss_coefficient * (-1 if model._pipes[pipe].flow_lower_bound[t-1] < 0.0 else 1) * (abs(model._pipes[pipe].flow_lower_bound[t-1]) ** model._pipes[pipe].exponent)
     elif model._flow[pipe,t].lb > 0.0:
-        return model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == model._pipes[pipe].loss_coefficient * (model._flow[pipe,t] ** exponent)
+        return model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == model._pipes[pipe].loss_coefficient * (model._flow[pipe,t] ** model._pipes[pipe].exponent)
     elif model._flow[pipe,t].ub < 0.0:
-        return model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == -model._pipes[pipe].loss_coefficient * ((-model._flow[pipe,t]) ** exponent)
+        return model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == -model._pipes[pipe].loss_coefficient * ((-model._flow[pipe,t]) ** model._pipes[pipe].exponent)
     else:
-        return model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == model._pipes[pipe].loss_coefficient * model._flow[pipe,t] * (((model._flow[pipe,t] ** 2) + epsilon) ** ((exponent - 1) / 2))
+        return model._head[model._pipes[pipe].start_node.label,t] - model._head[model._pipes[pipe].end_node.label,t] == model._pipes[pipe].loss_coefficient * model._flow[pipe,t] * (((model._flow[pipe,t] ** 2) + epsilon) ** ((model._pipes[pipe].exponent - 1) / 2))
 
-def AddHeadLossConstraints(model, head_loss_equation, epsilon):
-    exponent = 1.852 if head_loss_equation == 'HW' else 2
-    model._cons_head_loss = pyo.Constraint(model._set_of_pipes, model._set_of_time_periods, rule=lambda model, pipe, t: headloss_rule(model, pipe, t, epsilon, exponent))
+def AddHeadLossConstraints(model, epsilon):
+    model._cons_head_loss = pyo.Constraint(model._set_of_pipes, model._set_of_time_periods, rule=lambda model, pipe, t: headloss_rule(model, pipe, t, epsilon))
 
 def AddPumpFlowConstraints(model):
     model._cons_pump_flow_l = pyo.Constraint(model._set_of_pumps, model._set_of_time_periods, rule=lambda model, pump, t: model._flow[pump,t] >= model._pumps[pump].flow_lower_bound[t-1] * model._pump_status[pump,t] if model._pumps[pump].decisions[t-1] == -1 else pyo.Constraint.Skip)
@@ -148,18 +147,18 @@ def AddPumpHeadConstraints(model, initial_solution, epsilon):
 
 def AddValveHeadConstraints(model, initial_solution):
     if initial_solution is not None:
-        model._cons_valve_head_l = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: model._head[model._valves[valve].start_node.label,t] == model._head[model._valves[valve].end_node.label,t] if initial_solution['valve_status'][valve][t-1] == 1 else pyo.Constraint.Skip)
+        model._cons_valve_head_l = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] == model._valves[valve].loss_coefficient * (model._flow[valve,t] ** model._valves[valve].exponent) if initial_solution['valve_status'][valve][t-1] == 1 else pyo.Constraint.Skip)
     else:
-        model._cons_valve_head_l = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] >= (model._valves[valve].start_node.head_lower_bound[t-1] - model._valves[valve].end_node.head_upper_bound[t-1]) * (1 - model._valve_status[valve,t]) if model._valves[valve].decisions[t-1] == -1 else model._head[model._valves[valve].start_node.label,t] == model._head[model._valves[valve].end_node.label,t] if model._valves[valve].decisions[t-1] == 1 else pyo.Constraint.Skip)
-        model._cons_valve_head_u = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] <= (model._valves[valve].start_node.head_upper_bound[t-1] - model._valves[valve].end_node.head_lower_bound[t-1]) * (1 - model._valve_status[valve,t]) if model._valves[valve].decisions[t-1] == -1 else pyo.Constraint.Skip)
+        model._cons_valve_head_l = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] - model._valves[valve].loss_coefficient * (model._flow[valve,t] ** model._valves[valve].exponent) >= (model._valves[valve].start_node.head_lower_bound[t-1] - model._valves[valve].end_node.head_upper_bound[t-1]) * (1 - model._valve_status[valve,t]) if model._valves[valve].decisions[t-1] == -1 else model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] == model._valves[valve].loss_coefficient * (model._flow[valve,t] ** model._valves[valve].exponent) if model._valves[valve].decisions[t-1] == 1 else pyo.Constraint.Skip)
+        model._cons_valve_head_u = pyo.Constraint(model._set_of_valves, model._set_of_time_periods, rule=lambda model, valve, t: model._head[model._valves[valve].start_node.label,t] - model._head[model._valves[valve].end_node.label,t] - model._valves[valve].loss_coefficient * (model._flow[valve,t] ** model._valves[valve].exponent) <= (model._valves[valve].start_node.head_upper_bound[t-1] - model._valves[valve].end_node.head_lower_bound[t-1]) * (1 - model._valve_status[valve,t]) if model._valves[valve].decisions[t-1] == -1 else pyo.Constraint.Skip)
 
-def AddTankBalanceConstraints(model, hydraulic_timestep): #m^3 / s == m^3
+def AddTankBalanceConstraints(model, hydraulic_timestep):
     model._cons_tank_balance = pyo.Constraint(model._set_of_tanks, model._set_of_time_periods, rule=lambda model, tank, t: (hydraulic_timestep / model._tanks[tank].area) * sum(model._flow[edge.label,t] for edge in model._tanks[tank].incoming_edges) - (hydraulic_timestep / model._tanks[tank].area) * sum(model._flow[edge.label,t] for edge in model._tanks[tank].outgoing_edges) == model._head[tank,t+1] - model._head[tank,t])
 
-def AddJunctionBalanceConstraints(model): #m^3 / s == m^3
-    model._cons_junction_balance = pyo.Constraint(model._set_of_non_reservoir_junctions, model._set_of_time_periods, rule=lambda model, junction, t: sum(model._flow[edge.label,t] for edge in model._junctions[junction].incoming_edges) - sum(model._flow[edge.label,t] for edge in model._junctions[junction].outgoing_edges) == model._junctions[junction].net_demand[t-1])
+def AddJunctionBalanceConstraints(model):
+    model._cons_junction_balance = pyo.Constraint(model._set_of_non_reservoir_junctions, model._set_of_time_periods, rule=lambda model, junction, t: sum(model._flow[edge.label,t] for edge in model._junctions[junction].incoming_edges) - sum(model._flow[edge.label,t] for edge in model._junctions[junction].outgoing_edges) == model._junctions[junction].net_demand[t-1] if not all(edge.flow_lower_bound[t-1] == edge.flow_upper_bound[t-1] for edge in model._junctions[junction].incoming_edges + model._junctions[junction].outgoing_edges) else pyo.Constraint.Skip)
 
-def PyomoOperationalModel(method, epanet_model, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, head_loss_equation, initial_solution = None, flow_direction = False, epsilon = 1e-12):
+def PyomoOperationalModel(method, epanet_model, results_directory, junctions, tanks, pipes, pumps, valves, time_steps, hydraulic_timestep, time_limit, initial_solution = None, flow_direction = False, epsilon = 1e-8):
     model = pyo.ConcreteModel()
     model._junctions, model._tanks, model._pipes, model._pumps, model._valves, model._time_steps = junctions, tanks, pipes, pumps, valves, time_steps
     model._nodes, model._links = junctions | tanks, pipes | pumps | valves
@@ -167,7 +166,7 @@ def PyomoOperationalModel(method, epanet_model, results_directory, junctions, ta
     DefineSets(model)
     DefineDecisionVariables(model, method, flow_direction, epsilon, initial_solution)
     DefineObjective(model)
-    AddHeadLossConstraints(model, head_loss_equation, epsilon)
+    AddHeadLossConstraints(model, epsilon)
     if initial_solution is None:
         AddPumpFlowConstraints(model)
         AddValveFlowConstraints(model)
@@ -181,7 +180,7 @@ def PyomoOperationalModel(method, epanet_model, results_directory, junctions, ta
 
     if method in ['two_phased', 'callback', 'ipopt']:
         solver = pyo.SolverFactory('ipopt', executable=os.path.expanduser('~/.idaes/bin/ipopt'))
-        solver.options['max_cpu_time'] = 600
+        solver.options['max_cpu_time'] = time_limit
         solver.options['bound_relax_factor'] = 0
         #solver.options['bound_push'] = 1e-6
         #solver.options['bound_frac'] = 1e-6
@@ -189,7 +188,7 @@ def PyomoOperationalModel(method, epanet_model, results_directory, junctions, ta
     else:
         solver = pyo.SolverFactory('baron', executable='/Users/emirsener/baron-osxarm64/baron')
         solver.options['CplexLibName'] = '/Users/emirsener/Applications/CPLEX_Studio2212/cplex/bin/arm64_osx/libcplex2212.dylib'
-        solver.options['MaxTime'] = 600
+        solver.options['MaxTime'] = time_limit
         solver.options['LPSol'] = 3
 
     log_path = os.path.join(results_directory, f'{epanet_model}_log.txt')

@@ -1,6 +1,8 @@
 import os
+import json
 import pandas as pd
 import numpy as np
+from fractions import Fraction
 from decimal import Decimal, ROUND_FLOOR, ROUND_CEILING
 
 def write_results(results_directory, txt_name, line, mode = 'a'):
@@ -26,7 +28,7 @@ def write_bounds(junctions, tanks, pipes, pumps, valves, time_steps, results_dir
     for label, node in (junctions | tanks).items():
         for t in range(time_steps):
             to_write.append([f'head({label}, {t})', node.head_lower_bound[t], node.head_upper_bound[t]])
-        if label in tanks.keys():
+        if label in tanks:
             to_write.append([f'head({label}, {time_steps})', node.head_lower_bound[time_steps], node.head_upper_bound[time_steps]])
 
     for label, arc in (pipes | pumps | valves).items():
@@ -52,3 +54,36 @@ def round_bound(value, rounding, decimal='0.001'):
 
     rounded = Decimal(str(float(value))).quantize(Decimal(decimal), rounding=rounding)
     return 0.0 if rounded == 0 else float(rounded)
+
+def valid_inequality_key(terms, sense, rhs):
+    coefficients = {}
+
+    for variable, label, period, coefficient in terms:
+        key = (variable, label, int(period))
+        coefficients[key] = coefficients.get(key, Fraction(0)) + Fraction(float(coefficient))
+
+    terms = sorted((key, coefficient) for key, coefficient in coefficients.items() if coefficient != 0)
+    rhs = Fraction(float(rhs))
+    sign = 1
+
+    if sense == 'le':
+        sense = 'ge'
+        sign = -1
+    elif sense == 'eq' and terms and terms[0][1] < 0:
+        sign = -1
+
+    scale = abs(terms[0][1]) if terms else Fraction(1)
+
+    return (sense, tuple((key, sign * coefficient / scale) for key, coefficient in terms), sign * rhs / scale)
+
+def write_valid_inequalities(inequalities, results_directory, output_file='valid_inequalities.json'):
+    to_write = [
+        {'terms': [(variable, label, period, float(coefficient)) for (variable, label, period), coefficient in terms],
+         'sense': sense, 'rhs': float(rhs)} for sense, terms, rhs in sorted(inequalities)]
+
+    os.makedirs(results_directory, exist_ok=True)
+    output_file = os.path.join(results_directory, os.path.basename(output_file))
+    content = json.dumps(to_write, indent=4, allow_nan=False)
+
+    with open(output_file, 'w') as f:
+        f.write(content + '\n')

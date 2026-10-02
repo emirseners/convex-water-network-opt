@@ -5,7 +5,8 @@ from pyomo.common.tempfiles import TempfileManager
 
 def _objective_function(model):
     return (pyo.quicksum(((-model._pumps[pump].curve_b / (model._pumps[pump].curve_c + 1)) * (model._flow[pump] ** (model._pumps[pump].curve_c + 1))) - model._pumps[pump].curve_a * model._flow[pump] for pump in model._set_of_pumps)
-          + pyo.quicksum((model._pipes[pipe].loss_coefficient / (model._head_loss_exponent + 1)) * abs(model._flow[pipe]) ** (model._head_loss_exponent + 1) for pipe in model._set_of_pipes)
+          + pyo.quicksum((model._pipes[pipe].loss_coefficient / (model._pipes[pipe].exponent + 1)) * abs(model._flow[pipe]) ** (model._pipes[pipe].exponent + 1) for pipe in model._set_of_pipes)
+          + pyo.quicksum((model._valves[valve].loss_coefficient / (model._valves[valve].exponent + 1)) * abs(model._flow[valve]) ** (model._valves[valve].exponent + 1) for valve in model._set_of_valves)
           + pyo.quicksum(model._junctions[reservoir].head_lower_bound[0] * (sum(model._flow[edge.label] for edge in model._junctions[reservoir].incoming_edges if edge.label in model._links) - sum(model._flow[edge.label] for edge in model._junctions[reservoir].outgoing_edges if edge.label in model._links)) for reservoir in model._set_of_reservoirs)
           + pyo.quicksum(model._tanks[tank].head_lower_bound[0] * (sum(model._flow[edge.label] for edge in model._tanks[tank].incoming_edges if edge.label in model._links) - sum(model._flow[edge.label] for edge in model._tanks[tank].outgoing_edges if edge.label in model._links)) for tank in model._set_of_tanks)
            )
@@ -17,6 +18,7 @@ def DefineSets(model):
     model._set_of_connected_junctions = pyo.Set(initialize=[label for label, junction in model._junctions.items() if junction.segment != 'reservoir' and any(edge.label in model._links for edge in junction.incoming_edges + junction.outgoing_edges)])
     model._set_of_tanks = pyo.Set(initialize=list(model._tanks.keys()))
     model._set_of_pipes = pyo.Set(initialize=list(model._pipes.keys()))
+    model._set_of_valves = pyo.Set(initialize=list(model._valves.keys()))
     model._set_of_pumps = pyo.Set(initialize=list(model._pumps.keys()))
     model._set_of_nodes = pyo.Set(initialize=list(model._nodes.keys()))
     model._set_of_links = pyo.Set(initialize=list(model._links.keys()))
@@ -32,16 +34,16 @@ def DefineDecisionVariables(model, gurobi_solution):
 def DefineObjective(model):
     model.OBJ = pyo.Objective(rule=_objective_function, sense=pyo.minimize)
 
-def AddJunctionBalanceConstraints(model): #m^3 / s == m^3
+def AddJunctionBalanceConstraints(model):
     model._cons_junction_balance = pyo.Constraint(model._set_of_connected_junctions, rule=lambda model, junction: sum(model._flow[edge.label] for edge in model._junctions[junction].incoming_edges if edge.label in model._links) - sum(model._flow[edge.label] for edge in model._junctions[junction].outgoing_edges if edge.label in model._links) == model._junctions[junction].net_demand[0])
 
-def IpoptFixedOperationalModel(model_name, results_directory, junctions, tanks, pipes, pumps, hydraulic_timestep, head_loss_equation, gurobi_solution):
+def IpoptFixedOperationalModel(model_name, results_directory, junctions, tanks, pipes, pumps, valves, hydraulic_timestep, gurobi_solution):
     model = pyo.ConcreteModel()
     model._junctions, model._tanks = junctions, tanks
-    model._pipes = {label: pipe for label, pipe in pipes.items() if not pipe.check_valve or gurobi_solution['valve_status'][pipe.check_valve_label] == 1}
+    model._pipes = {label: pipe for label, pipe in pipes.items()}
     model._pumps = {label: pump for label, pump in pumps.items() if gurobi_solution['pump_status'][label] == 1}
-    model._nodes, model._links = junctions | tanks, model._pipes | model._pumps
-    model._head_loss_exponent = 1.852 if head_loss_equation == 'HW' else 2
+    model._valves = {label: valve for label, valve in valves.items() if gurobi_solution['valve_status'][label] == 1}
+    model._nodes, model._links = junctions | tanks, model._pipes | model._pumps | model._valves
 
     DefineSets(model)
     DefineDecisionVariables(model, gurobi_solution)
@@ -51,11 +53,8 @@ def IpoptFixedOperationalModel(model_name, results_directory, junctions, tanks, 
     model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
 
     solver = pyo.SolverFactory('ipopt', executable=os.path.expanduser('~/.idaes/bin/ipopt'))
-    solver.options['max_cpu_time'] = 600
     solver.options['bound_relax_factor'] = 0
-    solver.options['tol'] = 1e-8
-    solver.options['dual_inf_tol'] = 1e-8
-    solver.options['constr_viol_tol'] = 1e-8
+    solver.options['dual_inf_tol'] = 1e-4
 
     log_path = os.path.join(results_directory, f'{model_name}_log.txt')
     TempfileManager.tempdir = None

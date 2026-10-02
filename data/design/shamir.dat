@@ -1,0 +1,49 @@
+#Bragalli, D'Ambrosio, Lee, Lodi, Toth (2008)
+#PARAMETERS' DEFINITION FOR THE SHAMIR NETWORK
+
+#Node's parameters: elevation, water demand, minumum pressure, maximum pressure
+
+param: NODE:     elev          demand            pmin           pmax :=
+       1                0           0                210            210 
+       2              150           0.02777          30             60
+       3              160           0.02777          30             50
+       4              155           0.03333          30             55
+       5              150           0.075            30             60
+       6              165           0.09167          30             45
+       7              160           0.05555          30             50 ;
+
+
+#Pipe's parameters: start node, end node, length, maximum velocity
+
+param: PIPE:      node1            node2          length    dKc        vmax    :=
+       1           1                2              1000     130        2.0
+       2           2                3              1000     130        2.0
+       3           2                4              1000     130        2.0
+       4           4                5              1000     130        2.0
+       5           4                6              1000     130        2.0
+       6           6                7              1000     130        2.0
+       7           3                5              1000     130        2.0
+       8           5                7              1000     130        2.0 ;
+
+param dmin := 0.0254;
+param dmax := 0.6096;
+param d:= 0.00005;
+param p:=1.852;
+set source:= 1 ;
+
+param: DIAMSET:  discdiam             disccost :=
+       1            0.0254                2
+       2            0.0508                5
+       3            0.0762                8
+       4            0.1016               11
+       5            0.1524               16
+       6            0.2032               23
+       7            0.2540               32
+       8            0.3048               50
+       9            0.3556               60
+      10            0.4064               90
+      11            0.4572              130
+      12            0.5080              170
+      13            0.5588              300
+      14            0.6096              550 ;
+
