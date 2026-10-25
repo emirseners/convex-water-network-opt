@@ -1,3 +1,7 @@
+'''
+It is not being used for now.
+'''
+
 import os
 import pyomo.environ as pyo
 from pyomo.opt import TerminationCondition
@@ -5,8 +9,8 @@ from pyomo.common.tempfiles import TempfileManager
 
 def _objective_function(model):
     return (pyo.quicksum(((-model._pumps[pump].curve_b / (model._pumps[pump].curve_c + 1)) * (model._flow[pump] ** (model._pumps[pump].curve_c + 1))) - model._pumps[pump].curve_a * model._flow[pump] for pump in model._set_of_pumps)
-          + pyo.quicksum((model._pipes[pipe].loss_coefficient / (model._pipes[pipe].exponent + 1)) * abs(model._flow[pipe]) ** (model._pipes[pipe].exponent + 1) for pipe in model._set_of_pipes)
-          + pyo.quicksum((model._valves[valve].loss_coefficient / (model._valves[valve].exponent + 1)) * abs(model._flow[valve]) ** (model._valves[valve].exponent + 1) for valve in model._set_of_valves)
+          + pyo.quicksum((model._pipes[pipe].resistance_coefficient / (model._pipes[pipe].exponent + 1)) * abs(model._flow[pipe]) ** (model._pipes[pipe].exponent + 1) for pipe in model._set_of_pipes)
+          + pyo.quicksum((model._valves[valve].resistance_coefficient / (model._valves[valve].exponent + 1)) * abs(model._flow[valve]) ** (model._valves[valve].exponent + 1) for valve in model._set_of_valves)
           + pyo.quicksum(model._junctions[reservoir].head_lower_bound[0] * (sum(model._flow[edge.label] for edge in model._junctions[reservoir].incoming_edges if edge.label in model._links) - sum(model._flow[edge.label] for edge in model._junctions[reservoir].outgoing_edges if edge.label in model._links)) for reservoir in model._set_of_reservoirs)
           + pyo.quicksum(model._tanks[tank].head_lower_bound[0] * (sum(model._flow[edge.label] for edge in model._tanks[tank].incoming_edges if edge.label in model._links) - sum(model._flow[edge.label] for edge in model._tanks[tank].outgoing_edges if edge.label in model._links)) for tank in model._set_of_tanks)
            )
@@ -37,7 +41,7 @@ def DefineObjective(model):
 def AddJunctionBalanceConstraints(model):
     model._cons_junction_balance = pyo.Constraint(model._set_of_connected_junctions, rule=lambda model, junction: sum(model._flow[edge.label] for edge in model._junctions[junction].incoming_edges if edge.label in model._links) - sum(model._flow[edge.label] for edge in model._junctions[junction].outgoing_edges if edge.label in model._links) == model._junctions[junction].net_demand[0])
 
-def IpoptFixedOperationalModel(model_name, results_directory, junctions, tanks, pipes, pumps, valves, hydraulic_timestep, gurobi_solution):
+def IpoptFixedModel(model_name, results_directory, junctions, tanks, pipes, pumps, valves, gurobi_solution):
     model = pyo.ConcreteModel()
     model._junctions, model._tanks = junctions, tanks
     model._pipes = {label: pipe for label, pipe in pipes.items()}
@@ -74,6 +78,6 @@ def IpoptFixedOperationalModel(model_name, results_directory, junctions, tanks, 
             solution['flow'] = {link: pyo.value(model._flow[link]) for link in model._set_of_links}
 
             if len(model._set_of_tanks) > 0:
-                solution['next_head'] = {tank: solution['head'][tank] + (hydraulic_timestep / model._tanks[tank].area) * (sum(solution['flow'][edge.label] for edge in model._tanks[tank].incoming_edges if edge.label in model._links) - sum(solution['flow'][edge.label] for edge in model._tanks[tank].outgoing_edges if edge.label in model._links)) for tank in model._set_of_tanks}
+                solution['next_head'] = {tank: solution['head'][tank] + (model._tanks[tank].tank_coef * (sum(solution['flow'][edge.label] for edge in model._tanks[tank].incoming_edges if edge.label in model._links) - sum(solution['flow'][edge.label] for edge in model._tanks[tank].outgoing_edges if edge.label in model._links))) for tank in model._set_of_tanks}
 
     return problem_status, solution

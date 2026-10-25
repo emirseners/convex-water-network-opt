@@ -1,30 +1,30 @@
 from fractions import Fraction
 import math
 
-def define_soc_constraints(pipes, pumps, valves, time_steps, cone_budget):
+def define_soc_constraints(network, cone_budget):
     if cone_budget == 1:
-        single_hydraulic_loss_soc(pipes | valves, time_steps)
-        single_head_gain_soc(pumps, time_steps)
+        single_hydraulic_loss_soc(network.pipes | network.valves, network.time_steps)
+        single_head_gain_soc(network.pumps, network.time_steps)
     else:
-        multiple_hydraulic_loss_soc(pipes | valves, time_steps, cone_budget)
-        multiple_head_gain_soc(pumps, time_steps, cone_budget)
+        multiple_hydraulic_loss_soc(network.pipes | network.valves, network.time_steps, cone_budget)
+        multiple_head_gain_soc(network.pumps, network.time_steps, cone_budget)
 
 def single_hydraulic_loss_soc(links, time_steps):
     for link in links.values():
         link.soc_outer_approximation = {}
         for t in range(1, time_steps + 1):
-            if link.flow_lower_bound[t-1] == link.flow_upper_bound[t-1] or (hasattr(link, 'decisions') and link.decisions[t-1] == 0): continue
-            if link.flow_upper_bound[t-1] > 0.0:
-                link.soc_outer_approximation[t,'pos'] = {'method': 'single', 'exponent': 1.0 / link.exponent, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': link.loss_coefficient ** (1 / link.exponent), 'x_bounds': [min(0.0, link.start_node.head_lower_bound[t-1] - link.end_node.head_upper_bound[t-1]), max(0.0, link.start_node.head_upper_bound[t-1] - link.end_node.head_lower_bound[t-1])], 'y_bounds': [0.0, 1.0], 'z_bounds': [0.0, max(0.0, link.flow_upper_bound[t-1])]}
-            if link.flow_lower_bound[t-1] < 0.0:
-                link.soc_outer_approximation[t,'neg'] = {'method': 'single', 'exponent': 1.0 / link.exponent, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': link.loss_coefficient ** (1 / link.exponent), 'x_bounds': [min(0.0, link.end_node.head_lower_bound[t-1] - link.start_node.head_upper_bound[t-1]), max(0.0, link.end_node.head_upper_bound[t-1] - link.start_node.head_lower_bound[t-1])], 'y_bounds': [0.0, 1.0], 'z_bounds': [min(0.0, link.flow_lower_bound[t-1]), 0.0]}
+            if link.fixed_flow[t-1] or (hasattr(link, 'status_decisions') and link.status_decisions[t-1] == 0) or (hasattr(link, 'selection_decision') and link.selection_decision == 0): continue
+            if link.flow_upper_bound[t - 1] > 0.0 and (not hasattr(link, "direction_decision") or link.direction_decision[t-1] != 0):
+                link.soc_outer_approximation[t,'pos'] = {'method': 'single', 'exponent': 1.0 / link.exponent, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': link.resistance_coefficient ** (1 / link.exponent), 'x_bounds': [min(0.0, link.start_node.head_lower_bound[t-1] - link.end_node.head_upper_bound[t-1]), max(0.0, link.start_node.head_upper_bound[t-1] - link.end_node.head_lower_bound[t-1])], 'y_bounds': [0.0, 1.0], 'z_bounds': [link.positive_flow_lower_bound[t-1], link.flow_upper_bound[t-1]]}
+            if (hasattr(link, "direction_decision") and link.direction_decision[t-1] != 1 and link.flow_lower_bound[t-1] < 0.0):
+                link.soc_outer_approximation[t,'neg'] = {'method': 'single', 'exponent': 1.0 / link.exponent, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': link.resistance_coefficient ** (1 / link.exponent), 'x_bounds': [min(0.0, link.end_node.head_lower_bound[t-1] - link.start_node.head_upper_bound[t-1]), max(0.0, link.end_node.head_upper_bound[t-1] - link.start_node.head_lower_bound[t-1])], 'y_bounds': [0.0, 1.0], 'z_bounds': [link.flow_lower_bound[t-1], link.negative_flow_upper_bound[t-1]]}
 
 def single_head_gain_soc(pumps, time_steps):
     for pump in pumps.values():
         pump.soc_outer_approximation = {}
         for t in range(1, time_steps+1):
-            if pump.decisions[t-1] == 0 or pump.flow_lower_bound[t-1] == pump.flow_upper_bound[t-1] or pump.curve_c == 1: continue
-            pump.soc_outer_approximation[t] = {'method': 'single', 'exponent': 1.0 / pump.curve_c, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': (-pump.curve_b) ** (1 / pump.curve_c), 'x_bounds': [min(0.0, pump.start_node.head_lower_bound[t-1] - pump.end_node.head_upper_bound[t-1] + pump.curve_a), max(0.0, pump.start_node.head_upper_bound[t-1] - pump.end_node.head_lower_bound[t-1] + pump.curve_a)], 'y_bounds': [0.0, 1.0], 'z_bounds': [min(0.0, pump.flow_lower_bound[t-1]), max(0.0, pump.flow_upper_bound[t-1])]}
+            if pump.status_decisions[t-1] == 0 or pump.fixed_flow[t-1] or pump.curve_c == 1: continue
+            pump.soc_outer_approximation[t] = {'method': 'single', 'exponent': 1.0 / pump.curve_c, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': (-pump.curve_b) ** (1 / pump.curve_c), 'x_bounds': [min(0.0, pump.start_node.head_lower_bound[t-1] - pump.end_node.head_upper_bound[t-1] + pump.curve_a), max(0.0, pump.start_node.head_upper_bound[t-1] - pump.end_node.head_lower_bound[t-1] + pump.curve_a)], 'y_bounds': [0.0, 1.0], 'z_bounds': [pump.positive_flow_lower_bound[t-1], pump.flow_upper_bound[t-1]]}
 
 def obtain_soc_lhs(cone_budget, exponent):
     exponent = Fraction(str(exponent))
@@ -70,15 +70,13 @@ def multiple_hydraulic_loss_soc(links, time_steps, cone_budget):
         link.soc_outer_approximation = {}
 
         for t in range(1, time_steps + 1):
-            if link.flow_lower_bound[t-1] == link.flow_upper_bound[t-1] or (hasattr(link, 'decisions') and link.decisions[t-1] == 0): continue
-
-            if link.flow_upper_bound[t-1] > 0.0:
-                z_coef = (link.loss_coefficient ** largest_rational) * (link.flow_upper_bound[t-1] ** ((largest_rational / exponent) - 1))
-                link.soc_outer_approximation[t,'pos'] = {'method': 'multiple', 'lhs_cons': lhs_cons, 'exponent': largest_rational, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': z_coef, 'x_bounds': [min(0.0, link.start_node.head_lower_bound[t-1] - link.end_node.head_upper_bound[t-1]), max(0.0, link.start_node.head_upper_bound[t-1] - link.end_node.head_lower_bound[t-1])], 'y_bounds': [0.0, 1.0], 'z_bounds': [0.0, max(0.0, link.flow_upper_bound[t-1])]}
-
-            if link.flow_lower_bound[t-1] < 0.0:
-                z_coef = (link.loss_coefficient ** largest_rational) * ((-link.flow_lower_bound[t-1]) ** ((largest_rational / exponent) - 1))
-                link.soc_outer_approximation[t,'neg'] = {'method': 'multiple', 'lhs_cons': lhs_cons, 'exponent': largest_rational, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': z_coef, 'x_bounds': [min(0.0, link.end_node.head_lower_bound[t-1] - link.start_node.head_upper_bound[t-1]), max(0.0, link.end_node.head_upper_bound[t-1] - link.start_node.head_lower_bound[t-1])], 'y_bounds': [0.0, 1.0], 'z_bounds': [min(0.0, link.flow_lower_bound[t-1]), 0.0]}
+            if link.fixed_flow[t-1] or (hasattr(link, 'status_decisions') and link.status_decisions[t-1] == 0) or (hasattr(link, 'selection_decision') and link.selection_decision == 0): continue
+            if link.flow_upper_bound[t - 1] > 0.0 and (not hasattr(link, "direction_decision") or link.direction_decision[t-1] != 0):
+                z_coef = (link.resistance_coefficient ** largest_rational) * (link.flow_upper_bound[t-1] ** ((largest_rational / exponent) - 1))
+                link.soc_outer_approximation[t,'pos'] = {'method': 'multiple', 'lhs_cons': lhs_cons, 'exponent': largest_rational, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': z_coef, 'x_bounds': [min(0.0, link.start_node.head_lower_bound[t-1] - link.end_node.head_upper_bound[t-1]), max(0.0, link.start_node.head_upper_bound[t-1] - link.end_node.head_lower_bound[t-1])], 'y_bounds': [0.0, 1.0], 'z_bounds': [link.positive_flow_lower_bound[t-1], link.flow_upper_bound[t-1]]}
+            if (hasattr(link, "direction_decision") and link.direction_decision[t-1] != 1 and link.flow_lower_bound[t-1] < 0.0):
+                z_coef = (link.resistance_coefficient ** largest_rational) * ((-link.flow_lower_bound[t-1]) ** ((largest_rational / exponent) - 1))
+                link.soc_outer_approximation[t,'neg'] = {'method': 'multiple', 'lhs_cons': lhs_cons, 'exponent': largest_rational, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': z_coef, 'x_bounds': [min(0.0, link.end_node.head_lower_bound[t-1] - link.start_node.head_upper_bound[t-1]), max(0.0, link.end_node.head_upper_bound[t-1] - link.start_node.head_lower_bound[t-1])], 'y_bounds': [0.0, 1.0], 'z_bounds': [link.flow_lower_bound[t-1], link.negative_flow_upper_bound[t-1]]}
 
 def multiple_head_gain_soc(pumps, time_steps, cone_budget):
     for pump in pumps.values():
@@ -93,6 +91,6 @@ def multiple_head_gain_soc(pumps, time_steps, cone_budget):
             continue
 
         for t in range(1, time_steps + 1):
-            if pump.decisions[t-1] == 0 or pump.flow_lower_bound[t-1] == pump.flow_upper_bound[t-1]: continue
+            if pump.status_decisions[t-1] == 0 or pump.fixed_flow[t-1]: continue
             z_coef = ((-pump.curve_b) ** largest_rational) * (pump.flow_upper_bound[t-1] ** ((largest_rational / exponent) - 1))
-            pump.soc_outer_approximation[t] = {'method': 'multiple', 'lhs_cons': lhs_cons, 'exponent': largest_rational, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': z_coef, 'x_bounds': [min(0.0, pump.start_node.head_lower_bound[t-1] - pump.end_node.head_upper_bound[t-1] + pump.curve_a), max(0.0, pump.start_node.head_upper_bound[t-1] - pump.end_node.head_lower_bound[t-1] + pump.curve_a)], 'y_bounds': [0.0, 1.0], 'z_bounds': [min(0.0, pump.flow_lower_bound[t-1]), max(0.0, pump.flow_upper_bound[t-1])]}
+            pump.soc_outer_approximation[t] = {'method': 'multiple', 'lhs_cons': lhs_cons, 'exponent': largest_rational, 'x_coef': 1.0, 'y_coef': 1.0, 'z_coef': z_coef, 'x_bounds': [min(0.0, pump.start_node.head_lower_bound[t-1] - pump.end_node.head_upper_bound[t-1] + pump.curve_a), max(0.0, pump.start_node.head_upper_bound[t-1] - pump.end_node.head_lower_bound[t-1] + pump.curve_a)], 'y_bounds': [0.0, 1.0], 'z_bounds': [pump.positive_flow_lower_bound[t-1], pump.flow_upper_bound[t-1]]}

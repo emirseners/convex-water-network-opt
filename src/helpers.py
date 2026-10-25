@@ -11,19 +11,23 @@ def write_results(results_directory, txt_name, line, mode = 'a'):
 
 def write_solution(solution, results_directory, output_file = 'solution.xlsx'):
     if solution is None: return
-    to_write = [['decision_variable', 'value']]
+    to_write = [['variable', 'value']]
 
     for variable, components in solution.items():
         for label, values in components.items():
-            for t, value in enumerate(values):
-                to_write.append([f'{variable}({label}, {t})', value])
+            if variable == 'pipe_status':
+                to_write.append([f'{variable}({label})', values])
+            else:
+                for t, value in enumerate(values):
+                    to_write.append([f'{variable}({label}, {t})', value])
 
     os.makedirs(results_directory, exist_ok = True)
     output_file = os.path.join(results_directory, os.path.basename(output_file))
     pd.DataFrame(to_write).to_excel(output_file, index = False, header = False)
 
-def write_bounds(junctions, tanks, pipes, pumps, valves, time_steps, results_directory, sheet_name = 'bounds', output_file = 'decision_variable_bounds.xlsx'):
-    to_write = [['decision_variable_key', 'lower_bound', 'upper_bound']]
+def write_bounds(network, sheet_name = 'bounds', output_file = 'variable_bounds.xlsx'):
+    junctions, tanks, pipes, pumps, valves, time_steps, results_directory = network.junctions, network.tanks, network.pipes, network.pumps, network.valves, network.time_steps, network.results_directory
+    to_write = [['variable_key', 'lower_bound', 'upper_bound', 'positive_flow_lower_bound', 'negative_flow_upper_bound']]
 
     for label, node in (junctions | tanks).items():
         for t in range(time_steps):
@@ -31,19 +35,26 @@ def write_bounds(junctions, tanks, pipes, pumps, valves, time_steps, results_dir
         if label in tanks:
             to_write.append([f'head({label}, {time_steps})', node.head_lower_bound[time_steps], node.head_upper_bound[time_steps]])
 
-    for label, arc in (pipes | pumps | valves).items():
+    for label, arc in pipes.items():
         for t in range(time_steps):
-            to_write.append([f'flow({label}, {t})', arc.flow_lower_bound[t], arc.flow_upper_bound[t]])
+            to_write.append([f'flow({label}, {t})', arc.flow_lower_bound[t], arc.flow_upper_bound[t], arc.positive_flow_lower_bound[t], arc.negative_flow_upper_bound[t]])
+
+    for label, arc in (pumps | valves).items():
+        for t in range(time_steps):
+            to_write.append([f'flow({label}, {t})', arc.flow_lower_bound[t], arc.flow_upper_bound[t], arc.positive_flow_lower_bound[t]])
 
     for variable, arcs in [('pump_status', pumps), ('valve_status', valves)]:
         for label, arc in arcs.items():
             for t in range(time_steps):
-                to_write.append([f'{variable}({label}, {t})', arc.decisions[t]])
+                to_write.append([f'{variable}({label}, {t})', arc.status_decisions[t]])
+
+    for label, arc in pipes.items():
+        to_write.append([f'pipe_status({label})', arc.selection_decision])
 
     os.makedirs(results_directory, exist_ok = True)
     output_file = os.path.join(results_directory, os.path.basename(output_file))
-    with pd.ExcelWriter(output_file, engine = 'openpyxl', mode = 'a' if os.path.exists(output_file) else 'w') as writer:
-        pd.DataFrame(to_write).to_excel(writer, sheet_name = sheet_name, index = False, header = False)
+    with pd.ExcelWriter(output_file, engine='openpyxl', mode='a' if os.path.exists(output_file) else 'w', if_sheet_exists='replace' if os.path.exists(output_file) else None) as writer:
+        pd.DataFrame(to_write).to_excel(writer, sheet_name=sheet_name, index=False, header=False)
 
 def round_bound(value, rounding, decimal='0.001'):
     rounding = ROUND_FLOOR if rounding == 'floor' else ROUND_CEILING

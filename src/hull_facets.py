@@ -66,7 +66,7 @@ def cached_facets(cache, facet_function, *arguments):
 def add_point(extreme_pts, y1, y2, y3):
     extreme_pts.add((y1, y2, y3))
 
-def operational_hydraulic_loss_hull_facets(y1_l, y1_u, y2_l, y2_u, y3_l, y3_u, beta, kappa, neg = False):
+def hydraulic_loss_hull_facets(y1_l, y1_u, y2_l, y2_u, y3_l, y3_u, beta, kappa, neg = False):
     loss = {rational(y3): rational(beta * (float(y3) ** kappa)) for y3 in (y3_l, y3_u)}
     beta = rational(beta)
     y1_l, y1_u, y2_l, y2_u, y3_l, y3_u = (rational(value) for value in (y1_l, y1_u, y2_l, y2_u, y3_l, y3_u))
@@ -96,7 +96,7 @@ def operational_hydraulic_loss_hull_facets(y1_l, y1_u, y2_l, y2_u, y3_l, y3_u, b
 
     return find_facets(extreme_pts, (y1_l, y1_u, y2_l, y2_u, y3_l, y3_u), neg)
 
-def operational_head_gain_hull_facets(y1_l, y1_u, y2_l, y2_u, y3_l, y3_u, a, b, c):
+def head_gain_hull_facets(y1_l, y1_u, y2_l, y2_u, y3_l, y3_u, a, b, c):
     gain = {rational(y3): rational(a) - rational(b * (float(y3) ** c)) for y3 in (y3_l, y3_u)}
     a, b = rational(a), rational(b)
     y1_l, y1_u, y2_l, y2_u, y3_l, y3_u = (rational(value) for value in (y1_l, y1_u, y2_l, y2_u, y3_l, y3_u))
@@ -128,22 +128,20 @@ def operational_head_gain_hull_facets(y1_l, y1_u, y2_l, y2_u, y3_l, y3_u, a, b, 
 
 def find_hydraulic_loss_facets(links, time_steps):
     cache = {}
-
     for link in links.values():
         link.hull_facets = {}
         for t in range(time_steps):
-            if link.flow_lower_bound[t] == link.flow_upper_bound[t] or (hasattr(link, 'decisions') and link.decisions[t] == 0): continue
-            if link.flow_upper_bound[t] > 0:
-                link.hull_facets[t, 'pos'] = cached_facets(cache, operational_hydraulic_loss_hull_facets, link.start_node.head_lower_bound[t], link.start_node.head_upper_bound[t], link.end_node.head_lower_bound[t], link.end_node.head_upper_bound[t], max(0, link.flow_lower_bound[t]), link.flow_upper_bound[t], link.loss_coefficient, link.exponent, False)
-            if link.flow_lower_bound[t] < 0:
-                link.hull_facets[t, 'neg'] = cached_facets(cache, operational_hydraulic_loss_hull_facets, link.end_node.head_lower_bound[t], link.end_node.head_upper_bound[t], link.start_node.head_lower_bound[t], link.start_node.head_upper_bound[t], -min(0, link.flow_upper_bound[t]), -link.flow_lower_bound[t], link.loss_coefficient, link.exponent, True)
+            if link.fixed_flow[t] or (hasattr(link, 'status_decisions') and link.status_decisions[t] == 0) or (hasattr(link, 'selection_decision') and link.selection_decision == 0): continue
+            if (hasattr(link, 'direction_decision') and link.direction_decision[t] != 0) or not hasattr(link, 'direction_decision'):
+                link.hull_facets[t, 'pos'] = cached_facets(cache, hydraulic_loss_hull_facets, link.start_node.head_lower_bound[t], link.start_node.head_upper_bound[t], link.end_node.head_lower_bound[t], link.end_node.head_upper_bound[t], link.positive_flow_lower_bound[t], link.flow_upper_bound[t], link.resistance_coefficient, link.exponent, False)
+            if hasattr(link, 'direction_decision') and link.direction_decision[t] != 1:
+                link.hull_facets[t, 'neg'] = cached_facets(cache, hydraulic_loss_hull_facets, link.end_node.head_lower_bound[t], link.end_node.head_upper_bound[t], link.start_node.head_lower_bound[t], link.start_node.head_upper_bound[t], -link.negative_flow_upper_bound[t], -link.flow_lower_bound[t], link.resistance_coefficient, link.exponent, True)
 
 def find_head_gain_facets(pumps, time_steps):
     cache = {}
-
     for pump in pumps.values():
         pump.hull_facets = {}
         for t in range(time_steps):
-            if pump.decisions[t] == 0 or pump.flow_lower_bound[t] == pump.flow_upper_bound[t] or pump.curve_c == 1: continue
-            if pump.flow_upper_bound[t] > 0:
-                pump.hull_facets[t] = cached_facets(cache, operational_head_gain_hull_facets, pump.start_node.head_lower_bound[t], pump.start_node.head_upper_bound[t], pump.end_node.head_lower_bound[t], pump.end_node.head_upper_bound[t], pump.flow_lower_bound[t], pump.flow_upper_bound[t], pump.curve_a, -pump.curve_b, pump.curve_c)
+            if pump.status_decisions[t] == 0 or pump.fixed_flow[t] or pump.curve_c == 1: continue
+            if pump.flow_upper_bound[t] > 0.0:
+                pump.hull_facets[t] = cached_facets(cache, head_gain_hull_facets, pump.start_node.head_lower_bound[t], pump.start_node.head_upper_bound[t], pump.end_node.head_lower_bound[t], pump.end_node.head_upper_bound[t], pump.positive_flow_lower_bound[t], pump.flow_upper_bound[t], pump.curve_a, -pump.curve_b, pump.curve_c)
